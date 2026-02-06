@@ -8,6 +8,7 @@ import type {
   SDKInitMessage,
   SDKAssistantMessage,
   StreamMessage,
+  ApprovalRequestMessage,
 } from "../types";
 import type { PermissionRequest } from "../store/useAppStore";
 import MDContent from "../render/markdown";
@@ -55,10 +56,10 @@ const useToolStatus = (toolCallId: string | undefined) => {
 };
 
 const StatusDot = ({ variant = "accent", isActive = false, isVisible = true }: {
-  variant?: "accent" | "success" | "error"; isActive?: boolean; isVisible?: boolean;
+  variant?: "accent" | "success" | "error" | "muted"; isActive?: boolean; isVisible?: boolean;
 }) => {
   if (!isVisible) return null;
-  const colorClass = variant === "success" ? "bg-success" : variant === "error" ? "bg-error" : "bg-accent";
+  const colorClass = variant === "success" ? "bg-success" : variant === "error" ? "bg-error" : variant === "muted" ? "bg-muted" : "bg-accent";
   return (
     <span className="relative flex h-2 w-2">
       {isActive && <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${colorClass} opacity-75`} />}
@@ -69,6 +70,7 @@ const StatusDot = ({ variant = "accent", isActive = false, isVisible = true }: {
 
 
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function isMarkdown(text: string): boolean {
   if (!text || typeof text !== "string") return false;
   const patterns: RegExp[] = [/^#{1,6}\s+/m, /```[\s\S]*?```/];
@@ -88,7 +90,7 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
   
   const isError = message.isError;
   let lines: string[];
-  
+
   if (isError) {
     lines = [extractTagContent(message.content, "tool_use_error") || message.content];
   } else {
@@ -128,7 +130,7 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
 const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssistantMessage; showIndicator?: boolean }) => (
   <div className="flex flex-col mt-4">
     <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+      <StatusDot variant="success" isActive={showIndicator} isVisible />
       Assistant
     </div>
     <MDContent text={message.content} />
@@ -139,7 +141,7 @@ const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssista
 const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoningMessage; showIndicator?: boolean }) => (
   <div className="flex flex-col mt-4">
     <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+      <StatusDot variant="muted" isActive={showIndicator} isVisible />
       Thinking
     </div>
     <MDContent text={message.content} />
@@ -170,13 +172,13 @@ const ToolCallCard = ({
   }, [message.toolCallId]);
 
   const getToolInfo = (): string | null => {
-    const input = message.toolInput;
+    const input = message.toolInput as Record<string, unknown>;
     switch (message.toolName) {
-      case "Bash": return (input as any)?.command || null;
-      case "Read": case "Write": case "Edit": return (input as any)?.file_path || null;
-      case "Glob": case "Grep": return (input as any)?.pattern || null;
-      case "Task": return (input as any)?.description || null;
-      case "WebFetch": return (input as any)?.url || null;
+      case "Bash": return (input?.command as string) || null;
+      case "Read": case "Write": case "Edit": return (input?.file_path as string) || null;
+      case "Glob": case "Grep": return (input?.pattern as string) || null;
+      case "Task": return (input?.description as string) || null;
+      case "WebFetch": return (input?.url as string) || null;
       default: return null;
     }
   };
@@ -226,15 +228,16 @@ const ToolCallCard = ({
   );
 };
 
+// InfoItem helper component
+const InfoItem = ({ name, value }: { name: string; value: string }) => (
+  <div className="text-[14px]">
+    <span className="mr-4 font-normal">{name}</span>
+    <span className="font-light">{value}</span>
+  </div>
+);
+
 // Init Card
 const InitCard = ({ message, showIndicator = false }: { message: SDKInitMessage; showIndicator?: boolean }) => {
-  const InfoItem = ({ name, value }: { name: string; value: string }) => (
-    <div className="text-[14px]">
-      <span className="mr-4 font-normal">{name}</span>
-      <span className="font-light">{value}</span>
-    </div>
-  );
-  
   return (
     <div className="flex flex-col gap-2 mt-2">
       <div className="header text-accent flex items-center gap-2">
@@ -253,19 +256,47 @@ const InitCard = ({ message, showIndicator = false }: { message: SDKInitMessage;
 const UserPromptCard = ({ message, showIndicator = false }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean }) => (
   <div className="flex flex-col mt-4">
     <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+      <StatusDot variant="accent" isActive={showIndicator} isVisible />
       User
     </div>
     <MDContent text={message.prompt} />
   </div>
 );
 
+// Approval Request Card (minimal inline indicator for server-side HITL)
+const ApprovalCard = ({ message }: { message: ApprovalRequestMessage }) => {
+  const getToolSummary = (tc: ApprovalRequestMessage["toolCalls"][0]): string | null => {
+    try {
+      const args = JSON.parse(tc.arguments) as Record<string, unknown>;
+      return (args.command as string) || (args.file_path as string) || (args.pattern as string) || (args.url as string) || null;
+    } catch { return null; }
+  };
+
+  return (
+    <>
+      {message.toolCalls.map((tc, idx) => (
+        <div key={idx} className="flex flex-row items-center gap-2 rounded-[1rem] bg-surface-tertiary px-3 py-2 mt-4 overflow-hidden min-w-0">
+          <span className="relative flex h-2 w-2 shrink-0">
+            {message.isPending && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${message.isPending ? "bg-amber-500" : "bg-success"}`} />
+          </span>
+          <span className={`text-sm font-medium shrink-0 ${message.isPending ? "text-amber-500" : "text-success"}`}>
+            {message.isPending ? "Pending Approval" : "Approved"}
+          </span>
+          <span className="text-sm font-medium text-accent shrink-0">{tc.name}</span>
+          <span className="text-sm text-muted truncate">{getToolSummary(tc)}</span>
+        </div>
+      ))}
+    </>
+  );
+};
+
 export function MessageCard({
   message,
   isLast = false,
   isRunning = false,
   permissionRequest,
-  onPermissionResult
+  onPermissionResult,
 }: {
   message: StreamMessage;
   isLast?: boolean;
@@ -278,6 +309,11 @@ export function MessageCard({
   // User prompt (local type, not from SDK)
   if (message.type === "user_prompt") {
     return <UserPromptCard message={message} showIndicator={showIndicator} />;
+  }
+
+  // Server-side HITL approval request (minimal inline indicator)
+  if (message.type === "approval_request") {
+    return <ApprovalCard message={message} />;
   }
 
   // SDK message types

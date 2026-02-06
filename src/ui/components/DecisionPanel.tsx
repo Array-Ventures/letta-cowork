@@ -14,22 +14,30 @@ type AskUserQuestionInput = {
 
 export function DecisionPanel({
   request,
-  onSubmit
+  onSubmit,
 }: {
   request: PermissionRequest;
   onSubmit: (result: CanUseToolResponse) => void;
 }) {
   const input = request.input as AskUserQuestionInput | null;
   const questions = input?.questions ?? [];
-  const [selectedOptions, setSelectedOptions] = useState<Record<number, string[]>>({});
+  const [selectedOptions, setSelectedOptions] = useState<
+    Record<number, string[]>
+  >({});
   const [otherInputs, setOtherInputs] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    setSelectedOptions({});
-    setOtherInputs({});
+    queueMicrotask(() => {
+      setSelectedOptions({});
+      setOtherInputs({});
+    });
   }, [request.toolUseId]);
 
-  const toggleOption = (qIndex: number, optionLabel: string, multiSelect?: boolean) => {
+  const toggleOption = (
+    qIndex: number,
+    optionLabel: string,
+    multiSelect?: boolean,
+  ) => {
     setSelectedOptions((prev) => {
       const current = prev[qIndex] ?? [];
       if (multiSelect) {
@@ -73,7 +81,9 @@ export function DecisionPanel({
   if (request.toolName === "AskUserQuestion" && questions.length > 0) {
     return (
       <div className="rounded-2xl border border-accent/20 bg-accent-subtle p-5">
-        <div className="text-xs font-semibold text-accent">Question from Letta</div>
+        <div className="text-xs font-semibold text-accent">
+          Question from Letta
+        </div>
         {questions.map((q, qIndex) => (
           <div key={qIndex} className="mt-4">
             <p className="text-sm text-ink-700">{q.question}</p>
@@ -84,7 +94,8 @@ export function DecisionPanel({
             )}
             <div className="mt-3 grid gap-2">
               {(q.options ?? []).map((option, optIndex) => {
-                const shouldAutoSubmit = questions.length === 1 && !q.multiSelect;
+                const shouldAutoSubmit =
+                  questions.length === 1 && !q.multiSelect;
                 return (
                   <button
                     key={optIndex}
@@ -107,32 +118,52 @@ export function DecisionPanel({
                     }}
                   >
                     <div className="font-medium">{option.label}</div>
-                    {option.description && <div className="mt-1 text-xs text-muted">{option.description}</div>}
+                    {option.description && (
+                      <div className="mt-1 text-xs text-muted">
+                        {option.description}
+                      </div>
+                    )}
                   </button>
                 );
               })}
             </div>
             <div className="mt-3">
-              <label className="block text-xs font-medium text-muted">Other</label>
+              <label className="block text-xs font-medium text-muted">
+                Other
+              </label>
               <input
                 type="text"
                 className="mt-1 w-full rounded-xl border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-700 focus:border-info/50 focus:outline-none"
                 placeholder="Type your answer..."
                 value={otherInputs[qIndex] ?? ""}
-                onChange={(e) => setOtherInputs((prev) => ({ ...prev, [qIndex]: e.target.value }))}
+                onChange={(e) =>
+                  setOtherInputs((prev) => ({
+                    ...prev,
+                    [qIndex]: e.target.value,
+                  }))
+                }
               />
             </div>
-            {q.multiSelect && <div className="mt-2 text-xs text-muted">Multiple selections allowed.</div>}
+            {q.multiSelect && (
+              <div className="mt-2 text-xs text-muted">
+                Multiple selections allowed.
+              </div>
+            )}
           </div>
         ))}
         <div className="mt-5 flex flex-wrap gap-3">
           <button
             className={`rounded-full px-5 py-2 text-sm font-medium text-white shadow-soft transition-colors ${
-              canSubmit ? "bg-accent hover:bg-accent-hover" : "bg-ink-400/40 cursor-not-allowed"
+              canSubmit
+                ? "bg-accent hover:bg-accent-hover"
+                : "bg-ink-400/40 cursor-not-allowed"
             }`}
             onClick={() => {
               if (!canSubmit) return;
-              onSubmit({ behavior: "allow", updatedInput: buildUpdatedInput() });
+              onSubmit({
+                behavior: "allow",
+                updatedInput: buildUpdatedInput(),
+              });
             }}
             disabled={!canSubmit}
           >
@@ -140,7 +171,12 @@ export function DecisionPanel({
           </button>
           <button
             className="rounded-full border border-ink-900/10 bg-surface px-5 py-2 text-sm font-medium text-ink-700 hover:bg-surface-tertiary transition-colors"
-            onClick={() => onSubmit({ behavior: "deny", message: "User canceled the question" })}
+            onClick={() =>
+              onSubmit({
+                behavior: "deny",
+                message: "User canceled the question",
+              })
+            }
           >
             Cancel
           </button>
@@ -151,12 +187,15 @@ export function DecisionPanel({
 
   return (
     <div className="rounded-2xl border border-accent/20 bg-accent-subtle p-5">
-      <div className="text-xs font-semibold text-accent">Permission Request</div>
+      <div className="text-xs font-semibold text-accent">
+        Permission Request
+      </div>
       <p className="mt-2 text-sm text-ink-700">
-        Letta wants to use: <span className="font-medium">{request.toolName}</span>
+        Letta wants to use:{" "}
+        <span className="font-medium">{request.toolName}</span>
       </p>
       <div className="mt-3 rounded-xl bg-surface-tertiary p-3">
-        <pre className="text-xs text-ink-600 font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto">
+        <pre className="text-xs text-ink-600 font-mono whitespace-pre-wrap wrap-break-word max-h-40 overflow-auto">
           {JSON.stringify(request.input, null, 2)}
         </pre>
       </div>
@@ -169,7 +208,9 @@ export function DecisionPanel({
         </button>
         <button
           className="rounded-full border border-ink-900/10 bg-surface px-5 py-2 text-sm font-medium text-ink-700 hover:bg-surface-tertiary transition-colors"
-          onClick={() => onSubmit({ behavior: "deny", message: "User denied the request" })}
+          onClick={() =>
+            onSubmit({ behavior: "deny", message: "User denied the request" })
+          }
         >
           Deny
         </button>

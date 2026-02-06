@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { CanUseToolResponse } from "./types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CanUseToolResponse, ApprovalRequestMessage } from "./types";
 import { useIPC } from "./hooks/useIPC";
 import { useMessageWindow } from "./hooks/useMessageWindow";
 import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, AgentIcon } from "./components/Sidebar";
 import { StartSessionModal } from "./components/StartSessionModal";
+import { CreateAgentModal } from "./components/CreateAgentModal";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard } from "./components/EventCard";
+import { ApprovalInputBar } from "./components/ApprovalInputBar";
 import MDContent from "./render/markdown";
 
 const SCROLL_THRESHOLD = 50;
@@ -21,6 +23,8 @@ function App() {
   const [showPartialMessage, setShowPartialMessage] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  const [showCreateAgentModal, setShowCreateAgentModal] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
   const prevMessagesLengthRef = useRef(0);
   const scrollHeightBeforeLoadRef = useRef(0);
   const shouldRestoreScrollRef = useRef(false);
@@ -34,12 +38,17 @@ function App() {
   const historyRequested = useAppStore((s) => s.historyRequested);
   const markHistoryRequested = useAppStore((s) => s.markHistoryRequested);
   const resolvePermissionRequest = useAppStore((s) => s.resolvePermissionRequest);
+  const markApprovalHandled = useAppStore((s) => s.markApprovalHandled);
   const handleServerEvent = useAppStore((s) => s.handleServerEvent);
   const prompt = useAppStore((s) => s.prompt);
   const setPrompt = useAppStore((s) => s.setPrompt);
   const cwd = useAppStore((s) => s.cwd);
   const setCwd = useAppStore((s) => s.setCwd);
   const pendingStart = useAppStore((s) => s.pendingStart);
+  const agents = useAppStore((s) => s.agents);
+  const models = useAppStore((s) => s.models);
+  const sessionsLoaded = useAppStore((s) => s.sessionsLoaded);
+  const agentsLoaded = useAppStore((s) => s.agentsLoaded);
 
   // Handle partial messages from stream events
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -78,15 +87,28 @@ function App() {
   const onEvent = useCallback((event: ServerEvent) => {
     handleServerEvent(event);
     handlePartialMessages(event);
+    if (event.type === "models.list") setLoadingModels(false);
   }, [handleServerEvent, handlePartialMessages]);
 
   const { connected, sendEvent } = useIPC(onEvent);
   const { handleStartFromModal } = usePromptActions(sendEvent);
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
-  const messages = activeSession?.messages ?? [];
+  const activeAgent = agents.find((a) => a.lettaAgentId === activeSession?.agentId);
+  const messages = useMemo(() => activeSession?.messages ?? [], [activeSession?.messages]);
   const permissionRequests = activeSession?.permissionRequests ?? [];
   const isRunning = activeSession?.status === "running";
+
+  // Derive pending HITL approval from messages (find the last pending one)
+  const pendingApproval = useMemo((): ApprovalRequestMessage | null => {
+    const msgs = activeSession?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i];
+      if (msg.type === "approval_request" && msg.isPending) return msg;
+      if (msg.type === "approval_request" && !msg.isPending) break;
+    }
+    return null;
+  }, [activeSession?.messages]);
 
   const {
     visibleMessages,
@@ -99,8 +121,23 @@ function App() {
 
   // 启动时检查 API 配置
   useEffect(() => {
-    if (connected) sendEvent({ type: "session.list" });
+    if (connected) {
+      sendEvent({ type: "session.list" });
+      sendEvent({ type: "agent.list" });
+    }
   }, [connected, sendEvent]);
+
+  // First launch: no agents and no sessions → prompt user to create an agent
+  useEffect(() => {
+    if (sessionsLoaded && agentsLoaded && agents.length === 0 && Object.keys(sessions).length === 0) {
+      // Use React 18+ automatic batching for state updates
+      queueMicrotask(() => {
+        setShowCreateAgentModal(true);
+        setLoadingModels(true);
+        sendEvent({ type: "models.list" });
+      });
+    }
+  }, [sessionsLoaded, agentsLoaded, agents, sessions, sendEvent]);
 
   useEffect(() => {
     if (!activeSessionId || !connected) return;
@@ -170,8 +207,10 @@ function App() {
 
   // Reset scroll state on session change
   useEffect(() => {
-    setShouldAutoScroll(true);
-    setHasNewMessages(false);
+    queueMicrotask(() => {
+      setShouldAutoScroll(true);
+      setHasNewMessages(false);
+    });
     prevMessagesLengthRef.current = 0;
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
@@ -182,7 +221,7 @@ function App() {
     if (shouldAutoScroll) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     } else if (messages.length > prevMessagesLengthRef.current && prevMessagesLengthRef.current > 0) {
-      setHasNewMessages(true);
+      queueMicrotask(() => setHasNewMessages(true));
     }
     prevMessagesLengthRef.current = messages.length;
   }, [messages, partialMessage, shouldAutoScroll]);
@@ -199,6 +238,17 @@ function App() {
     setShowStartModal(true);
   }, [setShowStartModal]);
 
+  const openCreateAgentModal = useCallback(() => {
+    setShowCreateAgentModal(true);
+    setLoadingModels(true);
+    sendEvent({ type: "models.list" });
+  }, [sendEvent]);
+
+  const handleCreateAgent = useCallback((name: string, icon: string, color: string, model?: string) => {
+    sendEvent({ type: "agent.create", payload: { name, icon, color, model } });
+    setShowCreateAgentModal(false);
+  }, [sendEvent]);
+
   const handleDeleteSession = useCallback((sessionId: string) => {
     sendEvent({ type: "session.delete", payload: { sessionId } });
   }, [sendEvent]);
@@ -208,6 +258,18 @@ function App() {
     sendEvent({ type: "permission.response", payload: { sessionId: activeSessionId, toolUseId, result } });
     resolvePermissionRequest(activeSessionId, toolUseId);
   }, [activeSessionId, sendEvent, resolvePermissionRequest]);
+
+  const handleApprovalResponse = useCallback((decisions: Array<{ toolCallId: string; approve: boolean; reason?: string }>) => {
+    if (!activeSessionId || !pendingApproval) return;
+    const approvals = decisions.map((d) => ({
+      tool_call_id: d.toolCallId,
+      approve: d.approve,
+      ...(d.reason ? { reason: d.reason } : {}),
+    }));
+    // Mark as handled immediately so the approval bar disappears
+    markApprovalHandled(activeSessionId, pendingApproval.messageId);
+    sendEvent({ type: "approval.response", payload: { sessionId: activeSessionId, approvals } });
+  }, [activeSessionId, pendingApproval, sendEvent, markApprovalHandled]);
 
   const handleSendMessage = useCallback(() => {
     setShouldAutoScroll(true);
@@ -220,14 +282,26 @@ function App() {
       <Sidebar
         connected={connected}
         onNewSession={handleNewSession}
+        onNewAgent={openCreateAgentModal}
         onDeleteSession={handleDeleteSession}
       />
 
       <main className="flex flex-1 flex-col ml-[280px] bg-surface-cream">
         <div
-          className="flex items-center justify-center h-12 border-b border-ink-900/10 bg-surface-cream select-none"
+          className="flex items-center justify-center gap-3 h-12 border-b border-ink-900/10 bg-surface-cream select-none"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {activeAgent && (
+            <span className="flex items-center gap-1.5 rounded-full bg-accent-subtle px-2.5 py-1">
+              <span
+                className="flex h-5 w-5 items-center justify-center rounded-full"
+                style={{ backgroundColor: activeAgent.color }}
+              >
+                <AgentIcon name={activeAgent.icon} className="h-3 w-3 text-white" />
+              </span>
+              <span className="text-xs font-semibold text-accent">{activeAgent.name}</span>
+            </span>
+          )}
           <span className="text-sm font-medium text-ink-700">{activeSession?.title || "Letta Cowork"}</span>
         </div>
 
@@ -301,7 +375,15 @@ function App() {
           </div>
         </div>
 
-        <PromptInput sendEvent={sendEvent} onSendMessage={handleSendMessage} disabled={visibleMessages.length === 0} />
+        {pendingApproval && !isRunning ? (
+          <ApprovalInputBar
+            pendingApproval={pendingApproval}
+            isRunning={isRunning}
+            onRespond={handleApprovalResponse}
+          />
+        ) : (
+          <PromptInput sendEvent={sendEvent} onSendMessage={handleSendMessage} disabled={!activeSessionId} />
+        )}
 
         {hasNewMessages && !shouldAutoScroll && (
           <button
@@ -315,6 +397,15 @@ function App() {
           </button>
         )}
       </main>
+
+      {showCreateAgentModal && (
+        <CreateAgentModal
+          onClose={() => setShowCreateAgentModal(false)}
+          onCreate={handleCreateAgent}
+          models={models}
+          loadingModels={loadingModels}
+        />
+      )}
 
       {showStartModal && (
         <StartSessionModal

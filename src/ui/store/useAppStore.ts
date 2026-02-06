@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
+import type { ServerEvent, SessionStatus, StreamMessage, AgentInfo, ModelInfo } from "../types";
 
 export type PermissionRequest = {
   toolUseId: string;
@@ -11,6 +11,8 @@ export type SessionView = {
   id: string;
   title: string;
   status: SessionStatus;
+  hasPendingApproval?: boolean;
+  agentId?: string;
   cwd?: string;
   messages: StreamMessage[];
   permissionRequests: PermissionRequest[];
@@ -22,12 +24,16 @@ export type SessionView = {
 
 interface AppState {
   sessions: Record<string, SessionView>;
+  agents: AgentInfo[];
+  models: ModelInfo[];
+  selectedAgentId: string | null;
   activeSessionId: string | null;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
   globalError: string | null;
   sessionsLoaded: boolean;
+  agentsLoaded: boolean;
   showStartModal: boolean;
   historyRequested: Set<string>;
 
@@ -37,8 +43,11 @@ interface AppState {
   setGlobalError: (error: string | null) => void;
   setShowStartModal: (show: boolean) => void;
   setActiveSessionId: (id: string | null) => void;
+  setAgents: (agents: AgentInfo[]) => void;
+  setSelectedAgent: (agentId: string | null) => void;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
+  markApprovalHandled: (sessionId: string, messageId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
 }
 
@@ -48,12 +57,16 @@ function createSession(id: string): SessionView {
 
 export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
+  agents: [],
+  models: [],
+  selectedAgentId: null,
   activeSessionId: null,
   prompt: "",
   cwd: "",
   pendingStart: false,
   globalError: null,
   sessionsLoaded: false,
+  agentsLoaded: false,
   showStartModal: false,
   historyRequested: new Set(),
 
@@ -63,6 +76,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGlobalError: (globalError) => set({ globalError }),
   setShowStartModal: (showStartModal) => set({ showStartModal }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setAgents: (agents) => set({ agents }),
+  setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
 
   markHistoryRequested: (sessionId) => {
     set((state) => {
@@ -88,6 +103,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  markApprovalHandled: (sessionId, messageId) => {
+    set((state) => {
+      const existing = state.sessions[sessionId];
+      if (!existing) return {};
+      const messages = existing.messages.map((m) =>
+        m.type === "approval_request" && m.messageId === messageId
+          ? { ...m, isPending: false }
+          : m
+      );
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...existing, messages }
+        }
+      };
+    });
+  },
+
   handleServerEvent: (event) => {
     const state = get();
 
@@ -99,8 +132,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           nextSessions[session.id] = {
             ...existing,
             status: session.status,
+            hasPendingApproval: session.hasPendingApproval,
             title: session.title,
             cwd: session.cwd,
+            agentId: session.agentId,
             createdAt: session.createdAt,
             updatedAt: session.updatedAt
           };
@@ -109,7 +144,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ sessions: nextSessions, sessionsLoaded: true });
 
         const hasSessions = event.payload.sessions.length > 0;
-        set({ showStartModal: !hasSessions });
 
         if (!hasSessions) {
           get().setActiveSessionId(null);
@@ -137,15 +171,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.history": {
-        const { sessionId, messages: historyMessages, status } = event.payload;
+        const { sessionId, messages: historyMessages, status, hasPendingApproval } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           // Merge: history messages first, then any existing messages (like user_prompt added during init)
-          const mergedMessages = [...historyMessages, ...existing.messages];
+          // Dedup by uuid to prevent duplicates when history overlaps with streamed messages
+          const seen = new Set<string>();
+          const mergedMessages = [...historyMessages, ...existing.messages].filter((m) => {
+            const key = 'uuid' in m ? (m as { uuid: string }).uuid : undefined;
+            if (!key) return true;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
           return {
             sessions: {
               ...state.sessions,
-              [sessionId]: { ...existing, status, messages: mergedMessages, hydrated: true }
+              [sessionId]: {
+                ...existing,
+                status,
+                hasPendingApproval: hasPendingApproval ?? existing.hasPendingApproval,
+                messages: mergedMessages,
+                hydrated: true,
+              }
             }
           };
         });
@@ -153,7 +201,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.status": {
-        const { sessionId, status, title, cwd } = event.payload;
+        const { sessionId, status, title, cwd, agentId } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           return {
@@ -164,6 +212,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 status,
                 title: title ?? existing.title,
                 cwd: cwd ?? existing.cwd,
+                agentId: agentId ?? existing.agentId,
                 updatedAt: Date.now()
               }
             }
@@ -236,10 +285,21 @@ export const useAppStore = create<AppState>((set, get) => ({
             } else {
               messages.push(message);
             }
+          } else if (msgType === "approval_request") {
+            // Dedup by messageId — update existing or push new
+            const approvalMsg = message as { type: "approval_request"; messageId: string };
+            const existingIdx = messages.findIndex(
+              (m) => m.type === "approval_request" && m.messageId === approvalMsg.messageId
+            );
+            if (existingIdx >= 0) {
+              messages[existingIdx] = message;
+            } else {
+              messages.push(message);
+            }
           } else {
             messages.push(message);
           }
-          
+
           return {
             sessions: {
               ...state.sessions,
@@ -287,6 +347,43 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       case "runner.error": {
         set({ globalError: event.payload.message });
+        break;
+      }
+
+      case "agent.list": {
+        set({ agents: event.payload.agents, agentsLoaded: true });
+        break;
+      }
+
+      case "agent.created": {
+        set((state) => ({
+          agents: [...state.agents, event.payload],
+          selectedAgentId: event.payload.lettaAgentId,
+        }));
+        break;
+      }
+
+      case "agent.deleted": {
+        const { lettaAgentId } = event.payload;
+        set((state) => ({
+          agents: state.agents.filter((a) => a.lettaAgentId !== lettaAgentId),
+          selectedAgentId: state.selectedAgentId === lettaAgentId ? null : state.selectedAgentId,
+        }));
+        break;
+      }
+
+      case "agent.renamed": {
+        const { lettaAgentId, name } = event.payload;
+        set((state) => ({
+          agents: state.agents.map((a) =>
+            a.lettaAgentId === lettaAgentId ? { ...a, name } : a
+          ),
+        }));
+        break;
+      }
+
+      case "models.list": {
+        set({ models: event.payload.models });
         break;
       }
     }

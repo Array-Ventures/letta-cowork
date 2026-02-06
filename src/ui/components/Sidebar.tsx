@@ -1,31 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useAppStore } from "../store/useAppStore";
+import { useAppStore, type SessionView } from "../store/useAppStore";
+import type { AgentInfo, SessionStatus } from "../types";
 
 interface SidebarProps {
   connected: boolean;
   onNewSession: () => void;
+  onNewAgent: () => void;
   onDeleteSession: (sessionId: string) => void;
 }
 
 export function Sidebar({
   onNewSession,
-  onDeleteSession
+  onNewAgent,
+  onDeleteSession,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
+  const agents = useAppStore((state) => state.agents);
+  const selectedAgentId = useAppStore((state) => state.selectedAgentId);
+  const setSelectedAgent = useAppStore((state) => state.setSelectedAgent);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const setActiveSessionId = useAppStore((state) => state.setActiveSessionId);
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
-
-  const formatCwd = (cwd?: string) => {
-    if (!cwd) return "Working dir unavailable";
-    const parts = cwd.split(/[\\/]+/).filter(Boolean);
-    const tail = parts.slice(-2).join("/");
-    return `/${tail || cwd}`;
-  };
 
   const sessionList = useMemo(() => {
     const list = Object.values(sessions);
@@ -33,8 +32,15 @@ export function Sidebar({
     return list;
   }, [sessions]);
 
+  // Auto-select first agent if none selected
   useEffect(() => {
-    setCopied(false);
+    if (!selectedAgentId && agents.length > 0) {
+      setSelectedAgent(agents[0].lettaAgentId);
+    }
+  }, [agents, selectedAgentId, setSelectedAgent]);
+
+  useEffect(() => {
+    queueMicrotask(() => setCopied(false));
     if (closeTimerRef.current) {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
@@ -67,75 +73,88 @@ export function Sidebar({
     }, 3000);
   };
 
+  const sessionsForAgent = (agentId: string): SessionView[] =>
+    sessionList.filter((s) => s.agentId === agentId);
+
+  // Sessions with no agent assigned (legacy / fallback)
+  const unassignedSessions = sessionList.filter((s) => !s.agentId);
+
   return (
     <aside className="fixed inset-y-0 left-0 flex h-full w-[280px] flex-col gap-4 border-r border-border bg-sidebar px-4 pb-4 pt-12">
-      <div 
+      <div
         className="absolute top-0 left-0 right-0 h-12"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       />
-      <div className="flex gap-2">
-        <button
-          className="flex-1 rounded-xl border border-ink-900/10 bg-surface px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-surface-tertiary hover:border-ink-900/20 transition-colors"
-          onClick={onNewSession}
-        >
-          + New Task
-        </button>
-      </div>
+
+      {/* New Agent Button */}
+      <button
+        className="flex items-center justify-center gap-2 rounded-xl border border-ink-900/10 bg-surface px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-surface-tertiary hover:border-ink-900/20 transition-colors"
+        onClick={onNewAgent}
+      >
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 5V19M5 12H19" />
+        </svg>
+        New Agent
+      </button>
+
+      {/* Agent List */}
       <div className="flex flex-col gap-2 overflow-y-auto">
-        {sessionList.length === 0 && (
+        {agents.length === 0 && unassignedSessions.length === 0 && (
           <div className="rounded-xl border border-ink-900/5 bg-surface px-4 py-5 text-center text-xs text-muted">
-            No sessions yet. Click "+ New Task" to start.
+            No agents yet. Create one to get started.
           </div>
         )}
-        {sessionList.map((session) => (
-          <div
-            key={session.id}
-            className={`cursor-pointer rounded-xl border px-2 py-3 text-left transition ${activeSessionId === session.id ? "border-accent/30 bg-accent-subtle" : "border-ink-900/5 bg-surface hover:bg-surface-tertiary"}`}
-            onClick={() => setActiveSessionId(session.id)}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveSessionId(session.id); } }}
-            role="button"
-            tabIndex={0}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex flex-col min-w-0 flex-1 overflow-hidden">
-                <div className={`text-[12px] font-medium ${session.status === "running" ? "text-info" : session.status === "completed" ? "text-success" : session.status === "error" ? "text-error" : "text-ink-800"}`}>
-                  {session.title}
-                </div>
-                <div className="flex items-center justify-between mt-0.5 text-xs text-muted">
-                  <span className="truncate">{formatCwd(session.cwd)}</span>
-                </div>
-              </div>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <button className="flex-shrink-0 rounded-full p-1.5 text-ink-500 hover:bg-ink-900/10" aria-label="Open session menu" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                      <circle cx="5" cy="12" r="1.7" />
-                      <circle cx="12" cy="12" r="1.7" />
-                      <circle cx="19" cy="12" r="1.7" />
-                    </svg>
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content className="z-50 min-w-[220px] rounded-xl border border-ink-900/10 bg-surface p-1 shadow-lg" align="center" sideOffset={8}>
-                    <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => onDeleteSession(session.id)}>
-                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-error/80" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" />
-                      </svg>
-                      Delete this session
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => setResumeSessionId(session.id)}>
-                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <path d="M4 5h16v14H4z" /><path d="M7 9h10M7 12h6" /><path d="M13 15l3 2-3 2" />
-                      </svg>
-                      Resume in Letta Code
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
+
+        {agents.map((agent) => {
+          const isSelected = selectedAgentId === agent.lettaAgentId;
+          const agentSessions = sessionsForAgent(agent.lettaAgentId);
+
+          return isSelected ? (
+            <ExpandedAgentCard
+              key={agent.lettaAgentId}
+              agent={agent}
+              sessions={agentSessions}
+              activeSessionId={activeSessionId}
+              onSessionClick={setActiveSessionId}
+              onNewSession={onNewSession}
+              onDeleteSession={onDeleteSession}
+              onResumeSession={setResumeSessionId}
+            />
+          ) : (
+            <CollapsedAgentCard
+              key={agent.lettaAgentId}
+              agent={agent}
+              sessionCount={agentSessions.length}
+              onClick={() => setSelectedAgent(agent.lettaAgentId)}
+            />
+          );
+        })}
+
+        {/* Legacy sessions without agents */}
+        {unassignedSessions.length > 0 && (
+          <div className="mt-2">
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-light">
+              Unassigned Sessions
             </div>
+            {unassignedSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                title={session.title}
+                isActive={activeSessionId === session.id}
+                status={session.status}
+                hasPendingApproval={session.hasPendingApproval || session.messages.some(
+                  (m) => m.type === "approval_request" && m.isPending
+                )}
+                onClick={() => setActiveSessionId(session.id)}
+                onDelete={() => onDeleteSession(session.id)}
+                onResume={() => setResumeSessionId(session.id)}
+              />
+            ))}
           </div>
-        ))}
+        )}
       </div>
+
+      {/* Resume Dialog */}
       <Dialog.Root open={!!resumeSessionId} onOpenChange={(open) => !open && setResumeSessionId(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-ink-900/40 backdrop-blur-sm" />
@@ -164,5 +183,243 @@ export function Sidebar({
         </Dialog.Portal>
       </Dialog.Root>
     </aside>
+  );
+}
+
+// --- Sub-components ---
+
+function ExpandedAgentCard({
+  agent,
+  sessions,
+  activeSessionId,
+  onSessionClick,
+  onNewSession,
+  onDeleteSession,
+  onResumeSession,
+}: {
+  agent: AgentInfo;
+  sessions: SessionView[];
+  activeSessionId: string | null;
+  onSessionClick: (id: string) => void;
+  onNewSession: () => void;
+  onDeleteSession: (id: string) => void;
+  onResumeSession: (id: string) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-accent/40 bg-surface overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2.5 bg-accent-subtle px-3 py-2.5">
+        <div
+          className="flex h-8 w-8 items-center justify-center rounded-full"
+          style={{ backgroundColor: agent.color }}
+        >
+          <AgentIcon name={agent.icon} className="h-4 w-4 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-accent truncate">{agent.name}</div>
+          <div className="flex items-center gap-1.5 text-[11px] text-success">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+            Active
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" className="h-4 w-4 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M6 9L12 15L18 9" />
+        </svg>
+      </div>
+
+      {/* Sessions */}
+      <div className="flex flex-col gap-1 p-2">
+        {sessions.map((session) => (
+          <SessionItem
+            key={session.id}
+            title={session.title}
+            isActive={activeSessionId === session.id}
+            status={session.status}
+            hasPendingApproval={session.hasPendingApproval || session.messages.some(
+              (m) => m.type === "approval_request" && m.isPending
+            )}
+            onClick={() => onSessionClick(session.id)}
+            onDelete={() => onDeleteSession(session.id)}
+            onResume={() => onResumeSession(session.id)}
+          />
+        ))}
+        <button
+          className="flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-surface-tertiary transition-colors"
+          onClick={onNewSession}
+        >
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 5V19M5 12H19" />
+          </svg>
+          New Session
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CollapsedAgentCard({
+  agent,
+  sessionCount,
+  onClick,
+}: {
+  agent: AgentInfo;
+  sessionCount: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="flex items-center gap-2.5 rounded-xl border border-ink-900/10 bg-surface px-3 py-2.5 text-left hover:bg-surface-tertiary transition-colors"
+      onClick={onClick}
+    >
+      <div
+        className="flex h-8 w-8 items-center justify-center rounded-full"
+        style={{ backgroundColor: agent.color }}
+      >
+        <AgentIcon name={agent.icon} className="h-4 w-4 text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold text-ink-800 truncate">{agent.name}</div>
+        <div className="flex items-center gap-1.5 text-[11px] text-muted">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted" />
+          {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
+        </div>
+      </div>
+      <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M9 6L15 12L9 18" />
+      </svg>
+    </button>
+  );
+}
+
+function SessionStatusDot({ status, hasPendingApproval }: { status: SessionStatus; hasPendingApproval: boolean }) {
+  if (hasPendingApproval) {
+    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 flex-shrink-0" />;
+  }
+  if (status === "running") {
+    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-success flex-shrink-0" />;
+  }
+  if (status === "error") {
+    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-error flex-shrink-0" />;
+  }
+  if (status === "completed") {
+    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted flex-shrink-0" />;
+  }
+  return null;
+}
+
+function SessionItem({
+  title,
+  isActive,
+  status = "idle",
+  hasPendingApproval = false,
+  onClick,
+  onDelete,
+  onResume,
+}: {
+  title: string;
+  isActive: boolean;
+  status?: SessionStatus;
+  hasPendingApproval?: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+  onResume: () => void;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-colors ${
+        isActive ? "bg-accent-subtle" : "hover:bg-surface-tertiary"
+      }`}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+    >
+      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 ${isActive ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+      <span className={`flex-1 truncate text-xs ${isActive ? "font-medium text-ink-800" : "text-ink-700"}`}>
+        {title || "Untitled"}
+      </span>
+      <SessionStatusDot status={status} hasPendingApproval={hasPendingApproval} />
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            className="flex-shrink-0 rounded-full p-1 text-ink-500 opacity-0 group-hover:opacity-100 hover:bg-ink-900/10"
+            aria-label="Session menu"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
+              <circle cx="5" cy="12" r="1.7" />
+              <circle cx="12" cy="12" r="1.7" />
+              <circle cx="19" cy="12" r="1.7" />
+            </svg>
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="z-50 min-w-[180px] rounded-xl border border-ink-900/10 bg-surface p-1 shadow-lg" align="center" sideOffset={8}>
+            <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={onDelete}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4 text-error/80" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" />
+              </svg>
+              Delete
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={onResume}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M4 5h16v14H4z" /><path d="M7 9h10M7 12h6" /><path d="M13 15l3 2-3 2" />
+              </svg>
+              Resume in CLI
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  );
+}
+
+// Lucide icon component matching the design system
+export function AgentIcon({ name, className }: { name: string; className?: string }) {
+  const icons: Record<string, React.ReactNode> = {
+    bot: <>
+      <path d="M12 8V4H8" />
+      <rect x="4" y="8" width="16" height="12" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </>,
+    "file-code": <>
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8l6 6v12a2 2 0 0 1-2 2z" />
+      <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+      <path d="M10 12.5 8 15l2 2.5" />
+      <path d="m14 12.5 2 2.5-2 2.5" />
+    </>,
+    bug: <>
+      <path d="M12 20v-9" />
+      <path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z" />
+      <path d="m14.12 3.88L16 2" />
+      <path d="M21 21a4 4 0 0 0-3.81-4" />
+      <path d="M21 5a4 4 0 0 1-3.55 3.97" />
+      <path d="M22 13h-4" />
+      <path d="M3 21a4 4 0 0 1 3.81-4" />
+      <path d="M3 5a4 4 0 0 0 3.55 3.97" />
+      <path d="M6 13H2" />
+      <path d="m8 2 1.88 1.88" />
+      <path d="M9 7.13V6a3 3 0 1 1 6 0v1.13" />
+    </>,
+    database: <>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+      <path d="M3 12a9 3 0 0 0 18 0" />
+    </>,
+    terminal: <>
+      <path d="m4 17 6-6-6-6" />
+      <path d="M12 19h8" />
+    </>,
+  };
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {icons[name] || icons.bot}
+    </svg>
   );
 }

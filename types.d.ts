@@ -25,7 +25,9 @@ interface Window {
         subscribeStatistics: (callback: (statistics: Statistics) => void) => UnsubscribeFunction;
         getStaticData: () => Promise<StaticData>;
         // Letta Agent IPC APIs
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sendClientEvent: (event: any) => void;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onServerEvent: (callback: (event: any) => void) => UnsubscribeFunction;
         getRecentCwds: (limit?: number) => Promise<string[]>;
         selectDirectory: () => Promise<string | null>;

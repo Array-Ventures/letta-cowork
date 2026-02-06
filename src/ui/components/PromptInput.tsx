@@ -13,11 +13,13 @@ interface PromptInputProps {
   disabled?: boolean;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const sessions = useAppStore((state) => state.sessions);
+  const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const setPrompt = useAppStore((state) => state.setPrompt);
   const setPendingStart = useAppStore((state) => state.setPendingStart);
   const setGlobalError = useAppStore((state) => state.setGlobalError);
@@ -33,7 +35,7 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       // Title will be set from conversation ID
       sendEvent({
         type: "session.start",
-        payload: { title: "", prompt, cwd: cwd.trim() || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS }
+        payload: { title: "", prompt, cwd: cwd.trim() || undefined, agentId: selectedAgentId || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS }
       });
       // Don't clear prompt yet - wait for modal to close to avoid UI flicker
     } else {
@@ -44,7 +46,7 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: activeSession?.cwd  } });
       setPrompt("");
     }
-  }, [activeSession, activeSessionId, cwd, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
+  }, [activeSession, activeSessionId, cwd, prompt, selectedAgentId, sendEvent, setGlobalError, setPendingStart, setPrompt]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;

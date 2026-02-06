@@ -10,16 +10,16 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
     const unsubscribe = window.electron.onServerEvent((event: ServerEvent) => {
       onEvent(event);
     });
-    
+
     unsubscribeRef.current = unsubscribe;
-    setConnected(true);
+    queueMicrotask(() => setConnected(true));
 
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
         unsubscribeRef.current = null;
       }
-      setConnected(false);
+      queueMicrotask(() => setConnected(false));
     };
   }, [onEvent]);
 

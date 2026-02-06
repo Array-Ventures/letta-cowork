@@ -49,7 +49,7 @@ function calculateVisibleStartIndex(
 
 export function useMessageWindow(
     messages: StreamMessage[],
-    permissionRequests: PermissionRequest[],
+    _permissionRequests: PermissionRequest[],
     sessionId: string | null
 ): MessageWindowState {
     const [visibleUserInputCount, setVisibleUserInputCount] = useState(VISIBLE_WINDOW_SIZE);
@@ -62,8 +62,10 @@ export function useMessageWindow(
     // Reset window state on session change
     useEffect(() => {
         if (sessionId !== prevSessionIdRef.current) {
-            setVisibleUserInputCount(VISIBLE_WINDOW_SIZE);
-            setIsLoadingHistory(false);
+            queueMicrotask(() => {
+                setVisibleUserInputCount(VISIBLE_WINDOW_SIZE);
+                setIsLoadingHistory(false);
+            });
             prevSessionIdRef.current = sessionId;
         }
     }, [sessionId]);
@@ -83,7 +85,7 @@ export function useMessageWindow(
             }));
 
         return { visibleMessages: visible, visibleStartIndex: startIndex };
-    }, [messages, visibleUserInputCount, permissionRequests.length]);
+    }, [messages, visibleUserInputCount]);
 
     const hasMoreHistory = visibleStartIndex > 0;
 
