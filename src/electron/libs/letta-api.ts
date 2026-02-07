@@ -95,15 +95,27 @@ function extractContent(content: string | Array<{ type?: string; text?: string }
 // --- Message transformation ---
 
 export function transformLettaMessages(apiMessages: Message[], pendingRunId?: string): StreamMessage[] {
-  // API returns newest-first; sort by date ascending.
-  // Index tiebreaker preserves within-turn order (reasoning before assistant)
-  // when messages share the same timestamp.
-  const indexed = apiMessages.map((m, i) => ({ m, i }));
-  indexed.sort((a, b) => {
-    const dt = new Date(a.m.date).getTime() - new Date(b.m.date).getTime();
-    return dt !== 0 ? dt : a.i - b.i;
-  });
-  const chronological = indexed.map(({ m }) => m);
+  // API returns newest-first for pagination, but within same-ID pairs (e.g.
+  // reasoning + assistant), messages are in chronological order.  A simple
+  // .reverse() would flip within-pair order.  Instead: group consecutive
+  // same-ID messages, reverse the groups, then flatten.
+  const groups: Message[][] = [];
+  let currentGroup: Message[] = [];
+  let currentId: string | null = null;
+
+  for (const msg of apiMessages) {
+    if (msg.id !== currentId) {
+      if (currentGroup.length > 0) groups.push(currentGroup);
+      currentGroup = [msg];
+      currentId = msg.id;
+    } else {
+      currentGroup.push(msg);
+    }
+  }
+  if (currentGroup.length > 0) groups.push(currentGroup);
+
+  groups.reverse();
+  const chronological = groups.flat();
   const transformed: StreamMessage[] = [];
 
   for (const msg of chronological) {
@@ -156,18 +168,34 @@ export function transformLettaMessages(apiMessages: Message[], pendingRunId?: st
           : msg.tool_call
             ? [msg.tool_call as ToolCall]
             : [];
-        transformed.push({
-          type: "approval_request",
-          uuid: `${msg.id}-approval_request`,
-          messageId: msg.id,
-          runId: msg.run_id ?? "",
-          toolCalls: toolCalls.map((tc) => ({
-            name: tc.name,
-            arguments: tc.arguments,
+        const isPending = !!pendingRunId && msg.run_id === pendingRunId;
+
+        // Emit tool_call for each tool so ToolCallCard renders properly
+        for (const tc of toolCalls) {
+          transformed.push({
+            type: "tool_call",
             toolCallId: tc.tool_call_id,
-          })),
-          isPending: !!pendingRunId && msg.run_id === pendingRunId,
-        });
+            toolName: tc.name,
+            toolInput: safeParseJson(tc.arguments),
+            uuid: `${msg.id}-tool_call-${tc.tool_call_id}`,
+          });
+        }
+
+        // Only emit the approval_request if it's actually pending user action
+        if (isPending) {
+          transformed.push({
+            type: "approval_request",
+            uuid: `${msg.id}-approval_request`,
+            messageId: msg.id,
+            runId: msg.run_id ?? "",
+            toolCalls: toolCalls.map((tc) => ({
+              name: tc.name,
+              arguments: tc.arguments,
+              toolCallId: tc.tool_call_id,
+            })),
+            isPending: true,
+          });
+        }
         break;
       }
 
