@@ -1,103 +1,80 @@
 /**
- * Letta REST API client for fetching conversations and messages.
- * Source of truth for session persistence — no local storage needed.
+ * Letta API client using the official @letta-ai/letta-client SDK.
+ * Provides typed wrappers for run/conversation/message/agent operations
+ * and transforms SDK messages into our StreamMessage format.
  */
 
 import type { StreamMessage } from "../types.js";
+import type { Message, ToolCall } from "@letta-ai/letta-client/resources/agents/messages.js";
+import type { Run } from "@letta-ai/letta-client/resources/agents/messages.js";
+import type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations.js";
+import type { ToolReturnMessage } from "@letta-ai/letta-client/resources/tools.js";
+import { getLettaClient } from "./letta-client.js";
 
-// --- Letta API response types ---
+// Re-export SDK types used by ipc-handlers
+export type { Run, Conversation, Message };
 
-export type LettaConversation = {
-  id: string;
-  agent_id: string;
-  created_at: string;
-  updated_at: string;
-  summary: string | null;
-};
+// --- API functions ---
 
-type LettaMessageBase = {
-  id: string;
-  date: string;
-  message_type: string;
-};
+export async function fetchLastRun(conversationId: string): Promise<Run | null> {
+  const client = getLettaClient();
+  const page = await client.runs.list({
+    conversation_id: conversationId,
+    limit: 1,
+    order: "desc",
+  });
+  return page.items[0] ?? null;
+}
 
-type LettaUserMessage = LettaMessageBase & {
-  message_type: "user_message";
-  content: string;
-};
+export async function fetchConversations(agentId: string): Promise<Conversation[]> {
+  const client = getLettaClient();
+  return client.conversations.list({ agent_id: agentId });
+}
 
-type LettaAssistantMessage = LettaMessageBase & {
-  message_type: "assistant_message";
-  content: string;
-};
+export async function fetchMessagePage(
+  conversationId: string,
+  options?: { before?: string; limit?: number }
+): Promise<{ items: Message[]; hasMore: boolean }> {
+  const client = getLettaClient();
+  const limit = options?.limit ?? 50;
+  const page = await client.conversations.messages.list(conversationId, {
+    limit,
+    ...(options?.before ? { before: options.before } : {}),
+  });
+  // SDK's hasNextPage() returns true as long as items exist (can't detect last page
+  // without an extra fetch), so also check if we got fewer items than requested.
+  const hasMore = page.items.length >= limit && page.hasNextPage();
+  return { items: page.items, hasMore };
+}
 
-type LettaReasoningMessage = LettaMessageBase & {
-  message_type: "reasoning_message";
-  reasoning: string;
-};
+export async function updateAgent(agentId: string, updates: { name?: string; description?: string }): Promise<void> {
+  const client = getLettaClient();
+  await client.agents.update(agentId, updates);
+}
 
-type LettaSystemMessage = LettaMessageBase & {
-  message_type: "system_message";
-  content: string;
-};
-
-type LettaToolCallMessage = LettaMessageBase & {
-  message_type: "tool_call_message";
-  tool_call: {
-    id: string;
-    name: string;
-    arguments: string;
-  };
-};
-
-type LettaToolReturnMessage = LettaMessageBase & {
-  message_type: "tool_return_message";
-  tool_call_id: string;
-  content: string;
-  tool_return: string;
-  status: "success" | "error";
-};
-
-type LettaApprovalToolCall = {
-  name: string;
-  arguments: string;
-  tool_call_id: string;
-};
-
-type LettaApprovalRequestMessage = LettaMessageBase & {
-  message_type: "approval_request_message";
-  run_id: string;
-  tool_call: LettaApprovalToolCall;
-  tool_calls: LettaApprovalToolCall[];
-};
-
-type LettaApprovalResponseMessage = LettaMessageBase & {
-  message_type: "approval_response_message";
-};
-
-type LettaMessage =
-  | LettaUserMessage
-  | LettaAssistantMessage
-  | LettaReasoningMessage
-  | LettaSystemMessage
-  | LettaToolCallMessage
-  | LettaToolReturnMessage
-  | LettaApprovalRequestMessage
-  | LettaApprovalResponseMessage;
+export async function sendApprovalResponse(
+  conversationId: string,
+  approvals: Array<{ tool_call_id: string; approve: boolean; reason?: string }>
+): Promise<Message[]> {
+  const client = getLettaClient();
+  // Need agentId — retrieve from conversation
+  const conv = await client.conversations.retrieve(conversationId);
+  const response = await client.agents.messages.create(conv.agent_id, {
+    messages: [{
+      type: "approval" as const,
+      approvals: approvals.map((a) => ({
+        type: "approval" as const,
+        tool_call_id: a.tool_call_id,
+        approve: a.approve,
+        ...(a.reason ? { reason: a.reason } : {}),
+      })),
+    }],
+    streaming: false,
+  });
+  return response.messages;
+}
 
 // --- Helpers ---
-
-function getBaseUrl(): string {
-  return process.env.LETTA_BASE_URL || "http://localhost:8283";
-}
-
-function getHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (process.env.LETTA_API_KEY) {
-    headers["Authorization"] = `Bearer ${process.env.LETTA_API_KEY}`;
-  }
-  return headers;
-}
 
 function safeParseJson(str: string): Record<string, unknown> {
   try {
@@ -107,98 +84,17 @@ function safeParseJson(str: string): Record<string, unknown> {
   }
 }
 
-// --- Run types ---
-
-type LettaRun = {
-  id: string;
-  status: "created" | "running" | "completed" | "failed" | "cancelled";
-  stop_reason: string | null;
-  conversation_id: string | null;
-  agent_id: string;
-  created_at: string;
-};
-
-// --- API functions ---
-
-export async function fetchLastRun(conversationId: string): Promise<LettaRun | null> {
-  const url = `${getBaseUrl()}/v1/runs/?conversation_id=${encodeURIComponent(conversationId)}&order=desc&limit=1`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) return null;
-  const runs = await res.json() as LettaRun[];
-  return runs[0] ?? null;
-}
-
-export async function fetchConversations(agentId: string): Promise<LettaConversation[]> {
-  const url = `${getBaseUrl()}/v1/conversations/?agent_id=${encodeURIComponent(agentId)}`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) {
-    throw new Error(`Letta API error ${res.status}: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export async function fetchConversationMessages(conversationId: string): Promise<LettaMessage[]> {
-  const url = `${getBaseUrl()}/v1/conversations/${encodeURIComponent(conversationId)}/messages`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) {
-    throw new Error(`Letta API error ${res.status}: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export type AgentUpdate = {
-  name?: string;
-  description?: string;
-};
-
-export async function updateAgent(agentId: string, updates: AgentUpdate): Promise<void> {
-  const url = `${getBaseUrl()}/v1/agents/${encodeURIComponent(agentId)}`;
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: { ...getHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(updates),
-  });
-  if (!res.ok) {
-    throw new Error(`Letta API error ${res.status}: ${res.statusText}`);
-  }
-}
-
-export async function sendApprovalResponse(
-  conversationId: string,
-  approvals: Array<{ tool_call_id: string; approve: boolean; reason?: string }>
-): Promise<LettaMessage[]> {
-  const url = `${getBaseUrl()}/v1/conversations/${encodeURIComponent(conversationId)}/messages`;
-  const body = {
-    messages: [{
-      type: "approval",
-      approvals: approvals.map((a) => ({
-        type: "approval" as const,
-        tool_call_id: a.tool_call_id,
-        approve: a.approve,
-        ...(a.reason ? { reason: a.reason } : {}),
-      })),
-    }],
-    streaming: false,
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { ...getHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Letta API error ${res.status}: ${text}`);
-  }
-
-  const data = await res.json() as { messages: LettaMessage[] };
-  return data.messages;
+function extractContent(content: string | Array<{ type?: string; text?: string }>): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((c): c is { text: string } => "text" in c && typeof c.text === "string")
+    .map((c) => c.text)
+    .join("");
 }
 
 // --- Message transformation ---
 
-export function transformLettaMessages(apiMessages: LettaMessage[], pendingRunId?: string): StreamMessage[] {
+export function transformLettaMessages(apiMessages: Message[], pendingRunId?: string): StreamMessage[] {
   // API returns newest-first; sort by date ascending.
   // Index tiebreaker preserves within-turn order (reasoning before assistant)
   // when messages share the same timestamp.
@@ -211,13 +107,15 @@ export function transformLettaMessages(apiMessages: LettaMessage[], pendingRunId
   const transformed: StreamMessage[] = [];
 
   for (const msg of chronological) {
-    switch (msg.message_type) {
+    const messageType = msg.message_type;
+
+    switch (messageType) {
       case "user_message":
-        transformed.push({ type: "user_prompt", prompt: msg.content });
+        transformed.push({ type: "user_prompt", prompt: extractContent(msg.content), uuid: `${msg.id}-user` });
         break;
 
       case "assistant_message":
-        transformed.push({ type: "assistant", content: msg.content, uuid: `${msg.id}-assistant` });
+        transformed.push({ type: "assistant", content: extractContent(msg.content), uuid: `${msg.id}-assistant` });
         break;
 
       case "reasoning_message":
@@ -228,40 +126,47 @@ export function transformLettaMessages(apiMessages: LettaMessage[], pendingRunId
         // Redacted reasoning — skip in UI
         break;
 
-      case "tool_call_message":
+      case "tool_call_message": {
+        const tc = msg.tool_call as ToolCall;
         transformed.push({
           type: "tool_call",
-          toolCallId: msg.tool_call.id,
-          toolName: msg.tool_call.name,
-          toolInput: safeParseJson(msg.tool_call.arguments),
+          toolCallId: tc.tool_call_id,
+          toolName: tc.name,
+          toolInput: safeParseJson(tc.arguments),
           uuid: `${msg.id}-tool_call`,
         });
         break;
+      }
 
-      case "tool_return_message":
+      case "tool_return_message": {
+        const trm = msg as ToolReturnMessage;
         transformed.push({
           type: "tool_result",
-          toolCallId: msg.tool_call_id,
-          content: msg.tool_return || msg.content || "",
-          isError: msg.status === "error",
+          toolCallId: trm.tool_call_id,
+          content: trm.tool_return || "",
+          isError: trm.status === "error",
           uuid: `${msg.id}-tool_return`,
         });
         break;
+      }
 
       case "approval_request_message": {
-        const approvalMsg = msg as LettaApprovalRequestMessage;
-        // Pending if this request's run_id matches the conversation's last run
-        // which stopped with requires_approval (passed in as pendingRunId)
+        const toolCalls = Array.isArray(msg.tool_calls)
+          ? (msg.tool_calls as ToolCall[])
+          : msg.tool_call
+            ? [msg.tool_call as ToolCall]
+            : [];
         transformed.push({
           type: "approval_request",
-          messageId: approvalMsg.id,
-          runId: approvalMsg.run_id,
-          toolCalls: (approvalMsg.tool_calls ?? [approvalMsg.tool_call]).map((tc) => ({
+          uuid: `${msg.id}-approval_request`,
+          messageId: msg.id,
+          runId: msg.run_id ?? "",
+          toolCalls: toolCalls.map((tc) => ({
             name: tc.name,
             arguments: tc.arguments,
             toolCallId: tc.tool_call_id,
           })),
-          isPending: !!pendingRunId && approvalMsg.run_id === pendingRunId,
+          isPending: !!pendingRunId && msg.run_id === pendingRunId,
         });
         break;
       }
@@ -274,8 +179,16 @@ export function transformLettaMessages(apiMessages: LettaMessage[], pendingRunId
         // Internal to Letta — skip in UI
         break;
 
+      case "summary_message":
+        // Compaction summary — skip in UI
+        break;
+
+      case "event_message":
+        // Compaction event — skip in UI
+        break;
+
       default:
-        console.warn(`Unknown Letta message type: ${(msg as LettaMessageBase).message_type}`);
+        console.warn(`Unknown Letta message type: ${messageType}`);
         break;
     }
   }

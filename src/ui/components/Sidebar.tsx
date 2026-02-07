@@ -142,7 +142,7 @@ export function Sidebar({
                 title={session.title}
                 isActive={activeSessionId === session.id}
                 status={session.status}
-                hasPendingApproval={session.hasPendingApproval || session.messages.some(
+                hasPendingApproval={session.hasPendingApproval || [...session.restMessages, ...session.streamMessages].some(
                   (m) => m.type === "approval_request" && m.isPending
                 )}
                 onClick={() => setActiveSessionId(session.id)}
@@ -235,7 +235,7 @@ function ExpandedAgentCard({
             title={session.title}
             isActive={activeSessionId === session.id}
             status={session.status}
-            hasPendingApproval={session.hasPendingApproval || session.messages.some(
+            hasPendingApproval={session.hasPendingApproval || [...session.restMessages, ...session.streamMessages].some(
               (m) => m.type === "approval_request" && m.isPending
             )}
             onClick={() => onSessionClick(session.id)}

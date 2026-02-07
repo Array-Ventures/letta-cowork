@@ -95,29 +95,26 @@ function App() {
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const activeAgent = agents.find((a) => a.lettaAgentId === activeSession?.agentId);
-  const messages = useMemo(() => activeSession?.messages ?? [], [activeSession?.messages]);
   const permissionRequests = activeSession?.permissionRequests ?? [];
   const isRunning = activeSession?.status === "running";
-
-  // Derive pending HITL approval from messages (find the last pending one)
-  const pendingApproval = useMemo((): ApprovalRequestMessage | null => {
-    const msgs = activeSession?.messages ?? [];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const msg = msgs[i];
-      if (msg.type === "approval_request" && msg.isPending) return msg;
-      if (msg.type === "approval_request" && !msg.isPending) break;
-    }
-    return null;
-  }, [activeSession?.messages]);
 
   const {
     visibleMessages,
     hasMoreHistory,
     isLoadingHistory,
     loadMoreMessages,
-    resetToLatest,
     totalMessages,
-  } = useMessageWindow(messages, permissionRequests, activeSessionId);
+  } = useMessageWindow(sendEvent, activeSessionId);
+
+  // Derive pending HITL approval from visible messages (find the last pending one)
+  const pendingApproval = useMemo((): ApprovalRequestMessage | null => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      const msg = visibleMessages[i].message;
+      if (msg.type === "approval_request" && msg.isPending) return msg;
+      if (msg.type === "approval_request" && !msg.isPending) break;
+    }
+    return null;
+  }, [visibleMessages]);
 
   // 启动时检查 API 配置
   useEffect(() => {
@@ -220,18 +217,17 @@ function App() {
   useEffect(() => {
     if (shouldAutoScroll) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    } else if (messages.length > prevMessagesLengthRef.current && prevMessagesLengthRef.current > 0) {
+    } else if (totalMessages > prevMessagesLengthRef.current && prevMessagesLengthRef.current > 0) {
       queueMicrotask(() => setHasNewMessages(true));
     }
-    prevMessagesLengthRef.current = messages.length;
-  }, [messages, partialMessage, shouldAutoScroll]);
+    prevMessagesLengthRef.current = totalMessages;
+  }, [totalMessages, partialMessage, shouldAutoScroll]);
 
   const scrollToBottom = useCallback(() => {
     setShouldAutoScroll(true);
     setHasNewMessages(false);
-    resetToLatest();
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [resetToLatest]);
+  }, []);
 
   const handleNewSession = useCallback(() => {
     useAppStore.getState().setActiveSessionId(null);
@@ -274,8 +270,7 @@ function App() {
   const handleSendMessage = useCallback(() => {
     setShouldAutoScroll(true);
     setHasNewMessages(false);
-    resetToLatest();
-  }, [resetToLatest]);
+  }, []);
 
   return (
     <div className="flex h-screen bg-surface">

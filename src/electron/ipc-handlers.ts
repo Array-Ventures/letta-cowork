@@ -11,12 +11,15 @@ import {
 } from "./libs/runtime-state.js";
 import {
   fetchConversations,
-  fetchConversationMessages,
+  fetchMessagePage,
   fetchLastRun,
   transformLettaMessages,
   updateAgent,
   sendApprovalResponse,
+  type Run,
+  type Conversation,
 } from "./libs/letta-api.js";
+import { getLettaClient } from "./libs/letta-client.js";
 import { createAgent } from "@letta-ai/letta-code-sdk";
 import {
   loadAgents,
@@ -24,47 +27,43 @@ import {
   deleteAgent as deleteAgentFromStore,
   renameAgent as renameAgentInStore,
 } from "./libs/agent-store.js";
+import { installSkillsForAgent } from "./libs/skill-installer.js";
 
 // Track active runner handles
 const runnerHandles = new Map<string, RunnerHandle>();
 
-// After SDK run completes, check if server stopped at approval and emit missing messages.
-// The SDK doesn't stream approval_request_message (it's a server-side HITL concept),
-// so we need to fetch it from the API and emit it to the UI.
-async function emitMissingApprovalMessages(conversationId: string) {
+// After SDK run completes (or after approval response), fetch the true state from REST
+// and push it to the UI. This replaces ephemeral SDK stream messages with canonical data.
+async function emitSessionRefresh(conversationId: string) {
   try {
-    const lastRun = await fetchLastRun(conversationId);
-    if (!lastRun || lastRun.stop_reason !== "requires_approval") return;
+    const [{ items: apiMsgs, hasMore }, lastRun] = await Promise.all([
+      fetchMessagePage(conversationId),
+      fetchLastRun(conversationId),
+    ]);
+    const pendingRunId = lastRun?.stop_reason === "requires_approval" ? lastRun.id : undefined;
+    const hasPendingApproval = !!pendingRunId;
+    const status = pendingRunId
+      ? "idle"
+      : lastRun?.status === "failed"
+        ? "error"
+        : "completed";
+    const messages = transformLettaMessages(apiMsgs, pendingRunId);
+    // Use oldest message ID as cursor for scroll-up pagination
+    const cursor = apiMsgs.length > 0 ? apiMsgs[apiMsgs.length - 1].id : undefined;
 
-    const apiMessages = await fetchConversationMessages(conversationId);
-    const transformed = transformLettaMessages(apiMessages, lastRun.id);
-
-    // Find approval_request messages for this run that the UI is missing
-    const approvalMsgs = transformed.filter(
-      (m) => m.type === "approval_request" && m.runId === lastRun.id
-    );
-
-    for (const msg of approvalMsgs) {
-      emit({
-        type: "stream.message",
-        payload: { sessionId: conversationId, message: msg },
-      });
-    }
-
-    // Update session status to reflect pending approval
     emit({
-      type: "session.status",
-      payload: { sessionId: conversationId, status: "idle" },
+      type: "session.refresh",
+      payload: { sessionId: conversationId, messages, cursor, hasMore, status, hasPendingApproval },
     });
   } catch (error) {
-    console.error("Failed to fetch approval messages after run:", error);
+    console.error("Failed to refresh session after run:", error);
   }
 }
 
 // Derive session status from server run state, with runtime override
 function deriveSessionStatus(
   runtimeStatus: string | undefined,
-  lastRun: { status: string; stop_reason: string | null } | null
+  lastRun: Run | null
 ): "idle" | "running" | "completed" | "error" {
   if (runtimeStatus && runtimeStatus !== "idle") return runtimeStatus as "running" | "completed" | "error";
   if (!lastRun) return "idle";
@@ -94,12 +93,17 @@ export async function handleClientEvent(event: ClientEvent) {
   // Model listing
   if (event.type === "models.list") {
     try {
-      const baseUrl = process.env.LETTA_BASE_URL || "http://localhost:8283";
-      const res = await fetch(`${baseUrl}/v1/models/`);
-      const models = await res.json();
-      const llmModels = (models as Array<{ handle: string; name: string; display_name: string; provider_type: string; model_type: string; max_context_window: number }>)
+      const client = getLettaClient();
+      const models = await client.models.list();
+      const llmModels = models
         .filter((m) => m.model_type === "llm")
-        .map((m) => ({ handle: m.handle, name: m.name, display_name: m.display_name, provider_type: m.provider_type, max_context_window: m.max_context_window }));
+        .map((m) => ({
+          handle: m.handle ?? "",
+          name: m.name,
+          display_name: m.display_name ?? "",
+          provider_type: m.provider_type,
+          max_context_window: m.max_context_window,
+        }));
       emit({ type: "models.list", payload: { models: llmModels } });
     } catch (error) {
       console.error("Failed to fetch models:", error);
@@ -120,6 +124,8 @@ export async function handleClientEvent(event: ClientEvent) {
       const lettaAgentId = await createAgent(
         event.payload.model ? { model: event.payload.model } : undefined
       );
+      // Install bundled skills (e.g. web-artifacts-builder) into agent's skill directory
+      installSkillsForAgent(lettaAgentId);
       // SDK creates agents as "Nameless Agent" — set the user's chosen name via REST API
       await updateAgent(lettaAgentId, { name: event.payload.name }).catch((err) =>
         console.warn("Failed to set agent name on server:", err)
@@ -166,7 +172,7 @@ export async function handleClientEvent(event: ClientEvent) {
       );
 
       // Collect all conversations
-      const allConvs: Array<{ conv: { id: string; agent_id: string; created_at: string; updated_at: string }; runtimeStatus?: string }> = [];
+      const allConvs: Array<{ conv: Conversation; runtimeStatus?: string }> = [];
       for (let i = 0; i < agents.length; i++) {
         const result = results[i];
         if (result.status !== "fulfilled") {
@@ -191,8 +197,8 @@ export async function handleClientEvent(event: ClientEvent) {
           status: deriveSessionStatus(runtimeStatus, lastRun),
           hasPendingApproval: lastRun?.stop_reason === "requires_approval",
           agentId: conv.agent_id,
-          createdAt: new Date(conv.created_at).getTime(),
-          updatedAt: new Date(conv.updated_at).getTime(),
+          createdAt: conv.created_at ? new Date(conv.created_at).getTime() : 0,
+          updatedAt: conv.updated_at ? new Date(conv.updated_at).getTime() : 0,
         };
       });
 
@@ -205,26 +211,34 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.history") {
-    const conversationId = event.payload.sessionId;
+    const { sessionId: conversationId, before, limit } = event.payload;
+    const isScrollUp = !!before;
 
     try {
-      const [apiMessages, lastRun] = await Promise.all([
-        fetchConversationMessages(conversationId),
+      const [{ items: apiMsgs, hasMore }, lastRun] = await Promise.all([
+        fetchMessagePage(conversationId, { before, limit }),
         fetchLastRun(conversationId),
       ]);
-      // Only pending if the last run stopped because it requires approval
       const pendingRunId = lastRun?.stop_reason === "requires_approval" ? lastRun.id : undefined;
-      const hasPendingApproval = !!pendingRunId;
-      const messages = transformLettaMessages(apiMessages, pendingRunId);
+      const messages = transformLettaMessages(apiMsgs, pendingRunId);
+      // Use oldest message ID as cursor for the next scroll-up fetch
+      const cursor = apiMsgs.length > 0 ? apiMsgs[apiMsgs.length - 1].id : undefined;
 
-      // Derive status from server (lastRun), with runtime override if actively running
-      const runtimeStatus = getSession(conversationId)?.status;
-      const status = deriveSessionStatus(runtimeStatus, lastRun);
+      if (isScrollUp) {
+        emit({
+          type: "session.history",
+          payload: { sessionId: conversationId, status: "idle", messages, cursor, hasMore, append: true },
+        });
+      } else {
+        const hasPendingApproval = !!pendingRunId;
+        const runtimeStatus = getSession(conversationId)?.status;
+        const status = deriveSessionStatus(runtimeStatus, lastRun);
 
-      emit({
-        type: "session.history",
-        payload: { sessionId: conversationId, status, hasPendingApproval, messages },
-      });
+        emit({
+          type: "session.history",
+          payload: { sessionId: conversationId, status, hasPendingApproval, messages, cursor, hasMore },
+        });
+      }
     } catch (error) {
       console.error(`Failed to fetch history for ${conversationId}:`, error);
       const status = getSession(conversationId)?.status || "idle";
@@ -281,7 +295,7 @@ export async function handleClientEvent(event: ClientEvent) {
             });
           }
         },
-        onComplete: (convId) => emitMissingApprovalMessages(convId),
+        onComplete: (convId) => emitSessionRefresh(convId),
       });
     } catch (error) {
       console.error("Failed to start session:", error);
@@ -325,7 +339,7 @@ export async function handleClientEvent(event: ClientEvent) {
         resumeConversationId: conversationId,
         onEvent: emit,
         onSessionUpdate: () => {},
-        onComplete: (convId) => emitMissingApprovalMessages(convId),
+        onComplete: (convId) => emitSessionRefresh(convId),
       });
       runnerHandles.set(conversationId, handle);
     } catch (error) {
@@ -378,25 +392,9 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     try {
-      const responseMessages = await sendApprovalResponse(sessionId, approvals);
-
-      // Check if the continuation run also stopped at approval
-      const lastRun = await fetchLastRun(sessionId);
-      const pendingRunId = lastRun?.stop_reason === "requires_approval" ? lastRun.id : undefined;
-      const transformed = transformLettaMessages(responseMessages, pendingRunId);
-
-      for (const msg of transformed) {
-        emit({
-          type: "stream.message",
-          payload: { sessionId, message: msg },
-        });
-      }
-
-      const status = pendingRunId ? "idle" : "completed";
-      emit({
-        type: "session.status",
-        payload: { sessionId, status },
-      });
+      await sendApprovalResponse(sessionId, approvals);
+      // After approval, refresh from REST to get the true state
+      await emitSessionRefresh(sessionId);
     } catch (error) {
       console.error("Failed to send approval response:", error);
       emit({

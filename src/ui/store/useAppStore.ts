@@ -14,7 +14,11 @@ export type SessionView = {
   hasPendingApproval?: boolean;
   agentId?: string;
   cwd?: string;
-  messages: StreamMessage[];
+  restMessages: StreamMessage[];      // Server truth (paginated)
+  streamMessages: StreamMessage[];    // Ephemeral SDK stream
+  cursor?: string;                    // Oldest loaded message ID for scroll-up
+  hasMore?: boolean;                  // Whether older pages exist
+  isLoadingPage: boolean;             // Prevents concurrent page loads
   permissionRequests: PermissionRequest[];
   lastPrompt?: string;
   createdAt?: number;
@@ -48,11 +52,12 @@ interface AppState {
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   markApprovalHandled: (sessionId: string, messageId: string) => void;
+  setLoadingPage: (sessionId: string, loading: boolean) => void;
   handleServerEvent: (event: ServerEvent) => void;
 }
 
 function createSession(id: string): SessionView {
-  return { id, title: "", status: "idle", messages: [], permissionRequests: [], hydrated: false };
+  return { id, title: "", status: "idle", restMessages: [], streamMessages: [], isLoadingPage: false, permissionRequests: [], hydrated: false };
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -107,15 +112,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const existing = state.sessions[sessionId];
       if (!existing) return {};
-      const messages = existing.messages.map((m) =>
+      const mapFn = (m: StreamMessage) =>
         m.type === "approval_request" && m.messageId === messageId
           ? { ...m, isPending: false }
-          : m
-      );
+          : m;
       return {
         sessions: {
           ...state.sessions,
-          [sessionId]: { ...existing, messages }
+          [sessionId]: {
+            ...existing,
+            restMessages: existing.restMessages.map(mapFn),
+            streamMessages: existing.streamMessages.map(mapFn),
+          }
+        }
+      };
+    });
+  },
+
+  setLoadingPage: (sessionId, loading) => {
+    set((state) => {
+      const existing = state.sessions[sessionId];
+      if (!existing) return {};
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...existing, isLoadingPage: loading }
         }
       };
     });
@@ -171,19 +192,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.history": {
-        const { sessionId, messages: historyMessages, status, hasPendingApproval } = event.payload;
+        const { sessionId, messages: historyMessages, status, hasPendingApproval, cursor, hasMore, append } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
-          // Merge: history messages first, then any existing messages (like user_prompt added during init)
-          // Dedup by uuid to prevent duplicates when history overlaps with streamed messages
-          const seen = new Set<string>();
-          const mergedMessages = [...historyMessages, ...existing.messages].filter((m) => {
-            const key = 'uuid' in m ? (m as { uuid: string }).uuid : undefined;
-            if (!key) return true;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
+
+          if (append) {
+            // Scroll-up: prepend older messages, dedup by uuid
+            const seen = new Set(existing.restMessages.map((m) => 'uuid' in m ? (m as { uuid: string }).uuid : undefined).filter(Boolean));
+            const newMsgs = historyMessages.filter((m) => {
+              const key = 'uuid' in m ? (m as { uuid: string }).uuid : undefined;
+              return !key || !seen.has(key);
+            });
+            return {
+              sessions: {
+                ...state.sessions,
+                [sessionId]: {
+                  ...existing,
+                  restMessages: [...newMsgs, ...existing.restMessages],
+                  cursor: cursor ?? existing.cursor,
+                  hasMore: hasMore ?? existing.hasMore,
+                  isLoadingPage: false,
+                }
+              }
+            };
+          }
+
+          // Initial load: replace restMessages, clear streamMessages
           return {
             sessions: {
               ...state.sessions,
@@ -191,8 +225,40 @@ export const useAppStore = create<AppState>((set, get) => ({
                 ...existing,
                 status,
                 hasPendingApproval: hasPendingApproval ?? existing.hasPendingApproval,
-                messages: mergedMessages,
+                restMessages: historyMessages,
+                streamMessages: [],
+                cursor,
+                hasMore,
+                isLoadingPage: false,
                 hydrated: true,
+              }
+            }
+          };
+        });
+        break;
+      }
+
+      case "session.refresh": {
+        const { sessionId, messages: freshMessages, cursor, hasMore, status, hasPendingApproval } = event.payload;
+        set((state) => {
+          const existing = state.sessions[sessionId] ?? createSession(sessionId);
+          // Merge: keep already-loaded older pages, replace newest portion with fresh data
+          const freshUuids = new Set(freshMessages.map((m) => 'uuid' in m ? (m as { uuid: string }).uuid : undefined).filter(Boolean));
+          const olderMessages = existing.restMessages.filter((m) => {
+            const key = 'uuid' in m ? (m as { uuid: string }).uuid : undefined;
+            return key && !freshUuids.has(key);
+          });
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: {
+                ...existing,
+                restMessages: [...olderMessages, ...freshMessages],
+                streamMessages: [],  // Clear ephemeral stream
+                cursor: cursor ?? existing.cursor,
+                hasMore: hasMore ?? existing.hasMore,
+                status,
+                hasPendingApproval,
               }
             }
           };
@@ -257,53 +323,53 @@ export const useAppStore = create<AppState>((set, get) => ({
         const { sessionId, message } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
-          const messages = [...existing.messages];
-          
+          const streamMessages = [...existing.streamMessages];
+
           // Get message ID (uuid for SDK messages)
           const msgId = 'uuid' in message ? message.uuid : undefined;
           const msgType = message.type;
-          
+
           if (msgId) {
-            // Find existing message with same ID
-            const existingIdx = messages.findIndex(
+            // Find existing message with same ID in stream messages
+            const existingIdx = streamMessages.findIndex(
               (m) => 'uuid' in m && m.uuid === msgId
             );
             if (existingIdx >= 0) {
               // For streaming messages, ACCUMULATE content (SDK sends deltas)
               if (msgType === "reasoning" || msgType === "assistant") {
-                const existingMsg = messages[existingIdx];
+                const existingMsg = streamMessages[existingIdx];
                 const existingContent = 'content' in existingMsg ? existingMsg.content : "";
                 const newContent = 'content' in message ? message.content : "";
-                messages[existingIdx] = {
+                streamMessages[existingIdx] = {
                   ...message,
                   content: existingContent + newContent
                 } as StreamMessage;
               } else {
                 // Other messages: replace
-                messages[existingIdx] = message;
+                streamMessages[existingIdx] = message;
               }
             } else {
-              messages.push(message);
+              streamMessages.push(message);
             }
           } else if (msgType === "approval_request") {
             // Dedup by messageId — update existing or push new
             const approvalMsg = message as { type: "approval_request"; messageId: string };
-            const existingIdx = messages.findIndex(
+            const existingIdx = streamMessages.findIndex(
               (m) => m.type === "approval_request" && m.messageId === approvalMsg.messageId
             );
             if (existingIdx >= 0) {
-              messages[existingIdx] = message;
+              streamMessages[existingIdx] = message;
             } else {
-              messages.push(message);
+              streamMessages.push(message);
             }
           } else {
-            messages.push(message);
+            streamMessages.push(message);
           }
 
           return {
             sessions: {
               ...state.sessions,
-              [sessionId]: { ...existing, messages }
+              [sessionId]: { ...existing, streamMessages }
             }
           };
         });
@@ -314,13 +380,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         const { sessionId, prompt } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
-          const newMessages = [...existing.messages, { type: "user_prompt" as const, prompt }];
           return {
             sessions: {
               ...state.sessions,
               [sessionId]: {
                 ...existing,
-                messages: newMessages
+                streamMessages: [...existing.streamMessages, { type: "user_prompt" as const, prompt }]
               }
             }
           };

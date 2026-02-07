@@ -6,7 +6,11 @@
         "dist-react"
     ],
     "extraResources": [
-        "dist-electron/preload.cjs"
+        "dist-electron/preload.cjs",
+        {
+            "from": "src/skills",
+            "to": "skills"
+        }
     ],
     "asarUnpack": [
         "node_modules/@letta-ai/letta-code-sdk/**/*",
