@@ -296,7 +296,12 @@ function ExpandedAgentCard({
           <AgentIcon name={agent.icon} className="h-4 w-4 text-white" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-accent truncate">{agent.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[13px] font-semibold text-accent truncate">{agent.name}</span>
+            {agent.type === "cloud" && (
+              <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">Cloud</span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 text-[11px] text-success">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
             Active
@@ -358,7 +363,12 @@ function CollapsedAgentCard({
         <AgentIcon name={agent.icon} className="h-4 w-4 text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-semibold text-ink-800 truncate">{agent.name}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[13px] font-semibold text-ink-800 truncate">{agent.name}</span>
+          {agent.type === "cloud" && (
+            <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">Cloud</span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5 text-[11px] text-muted">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted" />
           {sessionCount} {sessionCount === 1 ? "session" : "sessions"}

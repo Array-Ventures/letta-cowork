@@ -66,12 +66,15 @@ export function usePromptActions(
   }, [activeSessionId, sendEvent]);
 
   const handleStartFromModal = useCallback(() => {
-    if (!cwd.trim()) {
+    // Cloud agents don't need a working directory
+    const agents = useAppStore.getState().agents;
+    const isCloud = agents.find((a) => a.lettaAgentId === agentId)?.type === "cloud";
+    if (!isCloud && !cwd.trim()) {
       setGlobalError("Working Directory is required to start a session.");
       return;
     }
     handleSend();
-  }, [cwd, handleSend, setGlobalError]);
+  }, [agentId, cwd, handleSend, setGlobalError]);
 
   return { prompt, setPrompt, isRunning, handleSend, handleStop, handleStartFromModal };
 }

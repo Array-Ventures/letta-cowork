@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron";
 import type { ClientEvent, ServerEvent } from "./types.js";
 import { runLetta, type RunnerHandle } from "./libs/runner.js";
+import { runCloudAgent } from "./libs/cloud-runner.js";
 import { createLogger } from "./libs/logger.js";
 
 const log = createLogger("ipc");
@@ -181,6 +182,7 @@ export async function handleClientEvent(event: ClientEvent) {
         icon: event.payload.icon,
         color: event.payload.color,
         model: event.payload.model,
+        type: event.payload.agentType,
       });
       emit({ type: "agent.created", payload: entry });
     } catch (error) {
@@ -297,11 +299,44 @@ export async function handleClientEvent(event: ClientEvent) {
 
   if (event.type === "session.start") {
     log.debug("session.start", { agentId: event.payload.agentId, promptLength: event.payload.prompt.length });
+
+    // Determine if this is a cloud agent
+    const agents = loadAgents();
+    const agent = agents.find((a) => a.lettaAgentId === event.payload.agentId);
+    const isCloud = agent?.type === "cloud";
+
     try {
       let conversationId: string | null = null;
       let handle: RunnerHandle | null = null;
 
-      handle = await runLetta({
+      const onSessionUpdate = (updates: { lettaConversationId?: string; agentId?: string }) => {
+        if (updates.lettaConversationId && !conversationId) {
+          conversationId = updates.lettaConversationId;
+
+          createRuntimeSession(conversationId);
+          updateSession(conversationId, { status: "running", agentId: event.payload.agentId, agentType: isCloud ? "cloud" : "local" });
+          if (handle) runnerHandles.set(conversationId, handle);
+
+          emit({
+            type: "session.status",
+            payload: { sessionId: conversationId, status: "running", title: conversationId, cwd: event.payload.cwd, agentId: event.payload.agentId },
+          });
+          emit({
+            type: "stream.user_prompt",
+            payload: { sessionId: conversationId, prompt: event.payload.prompt },
+          });
+        }
+      };
+
+      const onEvent = (e: ServerEvent) => {
+        if (conversationId && "sessionId" in e.payload) {
+          const payload = e.payload as { sessionId: string };
+          payload.sessionId = conversationId;
+        }
+        emit(e);
+      };
+
+      const runnerOptions = {
         prompt: event.payload.prompt,
         agentId: event.payload.agentId,
         session: {
@@ -310,36 +345,16 @@ export async function handleClientEvent(event: ClientEvent) {
           status: "running",
           cwd: event.payload.cwd,
         },
-        onEvent: (e) => {
-          // Use conversationId for all events
-          if (conversationId && "sessionId" in e.payload) {
-            const payload = e.payload as { sessionId: string };
-            payload.sessionId = conversationId;
-          }
-          emit(e);
-        },
-        onSessionUpdate: (updates) => {
-          // Called when session is initialized with conversationId
-          if (updates.lettaConversationId && !conversationId) {
-            conversationId = updates.lettaConversationId;
+        onEvent,
+        onSessionUpdate,
+        onComplete: (convId: string) => emitSessionRefresh(convId),
+      };
 
-            createRuntimeSession(conversationId);
-            updateSession(conversationId, { status: "running" });
-            if (handle) runnerHandles.set(conversationId, handle);
-
-            // Emit session.status to unblock UI - use conversationId as title
-            emit({
-              type: "session.status",
-              payload: { sessionId: conversationId, status: "running", title: conversationId, cwd: event.payload.cwd, agentId: event.payload.agentId },
-            });
-            emit({
-              type: "stream.user_prompt",
-              payload: { sessionId: conversationId, prompt: event.payload.prompt },
-            });
-          }
-        },
-        onComplete: (convId) => emitSessionRefresh(convId),
-      });
+      if (isCloud) {
+        handle = await runCloudAgent(runnerOptions);
+      } else {
+        handle = await runLetta(runnerOptions);
+      }
     } catch (error) {
       log.error("Failed to start session:", error);
       emit({
@@ -354,10 +369,17 @@ export async function handleClientEvent(event: ClientEvent) {
     log.debug("session.continue", { conversationId: event.payload.sessionId });
     const conversationId = event.payload.sessionId;
     let runtimeSession = getSession(conversationId);
-    
+
     if (!runtimeSession) {
       runtimeSession = createRuntimeSession(conversationId);
     }
+
+    // Determine if this is a cloud agent from runtime state or agent store
+    const isCloud = runtimeSession.agentType === "cloud" || (() => {
+      if (!runtimeSession.agentId) return false;
+      const agents = loadAgents();
+      return agents.find((a) => a.lettaAgentId === runtimeSession.agentId)?.type === "cloud";
+    })();
 
     updateSession(conversationId, { status: "running" });
     emit({
@@ -371,7 +393,7 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     try {
-      const handle = await runLetta({
+      const runnerOptions = {
         prompt: event.payload.prompt,
         session: {
           id: conversationId,
@@ -382,8 +404,12 @@ export async function handleClientEvent(event: ClientEvent) {
         resumeConversationId: conversationId,
         onEvent: emit,
         onSessionUpdate: () => {},
-        onComplete: (convId) => emitSessionRefresh(convId),
-      });
+        onComplete: (convId: string) => emitSessionRefresh(convId),
+      };
+
+      const handle = isCloud
+        ? await runCloudAgent(runnerOptions)
+        : await runLetta(runnerOptions);
       runnerHandles.set(conversationId, handle);
     } catch (error) {
       updateSession(conversationId, { status: "error" });

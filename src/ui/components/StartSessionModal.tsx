@@ -4,6 +4,7 @@ interface StartSessionModalProps {
   cwd: string;
   prompt: string;
   pendingStart: boolean;
+  agentType?: "local" | "cloud";
   onCwdChange: (value: string) => void;
   onPromptChange: (value: string) => void;
   onStart: () => void;
@@ -14,11 +15,13 @@ export function StartSessionModal({
   cwd,
   prompt,
   pendingStart,
+  agentType,
   onCwdChange,
   onPromptChange,
   onStart,
   onClose
 }: StartSessionModalProps) {
+  const isCloud = agentType === "cloud";
   const [recentCwds, setRecentCwds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -41,8 +44,11 @@ export function StartSessionModal({
             </svg>
           </button>
         </div>
-        <p className="mt-2 text-sm text-muted">Create a new session to start interacting with agent.</p>
+        <p className="mt-2 text-sm text-muted">
+          {isCloud ? "Start a new cloud session." : "Create a new session to start interacting with agent."}
+        </p>
         <div className="mt-5 grid gap-4">
+          {!isCloud && (
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-muted">Working Directory</span>
             <div className="flex gap-2">
@@ -80,6 +86,7 @@ export function StartSessionModal({
               </div>
             )}
           </label>
+          )}
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-muted">Prompt</span>
             <textarea
@@ -93,7 +100,7 @@ export function StartSessionModal({
           <button
             className="flex flex-col items-center rounded-full bg-accent px-5 py-3 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onStart}
-            disabled={pendingStart || !cwd.trim() || !prompt.trim()}
+            disabled={pendingStart || (!isCloud && !cwd.trim()) || !prompt.trim()}
           >
             {pendingStart ? (
               <svg aria-hidden="true" className="w-5 h-5 animate-spin" viewBox="0 0 100 101" fill="none">

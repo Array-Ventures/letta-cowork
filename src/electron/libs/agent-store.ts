@@ -15,6 +15,8 @@ export type AgentEntry = {
   color: string;
   model?: string;
   createdAt: string;
+  type?: "local" | "cloud";
+  sandboxId?: string;
 };
 
 type AgentStoreData = {
@@ -78,6 +80,7 @@ export async function createAndSaveAgent(opts: {
   icon: string;
   color: string;
   model?: string;
+  type?: "local" | "cloud";
 }): Promise<AgentEntry> {
   const lettaAgentId = await createAgent(
     opts.model ? { model: opts.model } : undefined
@@ -86,7 +89,19 @@ export async function createAndSaveAgent(opts: {
   await updateAgent(lettaAgentId, { name: opts.name }).catch((err) =>
     log.warn("Failed to set agent name on server:", err)
   );
-  log.debug("Created agent", { name: opts.name, lettaAgentId });
+
+  let sandboxId: string | undefined;
+
+  // Cloud mode: create Daytona sandbox + attach sandbox tools
+  if (opts.type === "cloud") {
+    const { createSandbox } = await import("./daytona.js");
+    const { attachSandboxToolsToAgent } = await import("./sandbox-tools.js");
+    const result = await createSandbox(opts.name);
+    await attachSandboxToolsToAgent(lettaAgentId, result.sandboxId);
+    sandboxId = result.sandboxId;
+  }
+
+  log.debug("Created agent", { name: opts.name, lettaAgentId, type: opts.type ?? "local", sandboxId });
   const entry: AgentEntry = {
     name: opts.name,
     lettaAgentId,
@@ -94,6 +109,8 @@ export async function createAndSaveAgent(opts: {
     color: opts.color,
     model: opts.model,
     createdAt: new Date().toISOString(),
+    type: opts.type ?? "local",
+    sandboxId,
   };
   saveAgent(entry);
   return entry;

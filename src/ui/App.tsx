@@ -135,8 +135,8 @@ function App() {
     sendEvent({ type: "models.list" });
   }, [sendEvent]);
 
-  const handleCreateAgent = useCallback((name: string, icon: string, color: string, model?: string) => {
-    sendEvent({ type: "agent.create", payload: { name, icon, color, model } });
+  const handleCreateAgent = useCallback((name: string, icon: string, color: string, model?: string, agentType?: "local" | "cloud") => {
+    sendEvent({ type: "agent.create", payload: { name, icon, color, model, agentType } });
     setShowCreateAgentModal(false);
   }, [sendEvent]);
 
@@ -226,6 +226,10 @@ function App() {
           cwd={cwd}
           prompt={prompt}
           pendingStart={pendingStart}
+          agentType={(() => {
+            const selectedAgentId = useAppStore.getState().selectedAgentId;
+            return agents.find((a) => a.lettaAgentId === selectedAgentId)?.type;
+          })()}
           onCwdChange={setCwd}
           onPromptChange={setPrompt}
           onStart={handleStartFromModal}

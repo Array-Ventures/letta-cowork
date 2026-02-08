@@ -63,6 +63,8 @@ export type AgentInfo = {
   color: string;
   model?: string;
   createdAt: string;
+  type?: "local" | "cloud";
+  sandboxId?: string;
 };
 
 export type ModelInfo = {
@@ -117,7 +119,7 @@ export type ClientEvent =
   | { type: "session.history"; payload: { sessionId: string; before?: string; limit?: number } }
   | { type: "permission.response"; payload: { sessionId: string; toolUseId: string; result: CanUseToolResponse } }
   | { type: "agent.list" }
-  | { type: "agent.create"; payload: { name: string; icon: string; color: string; model?: string } }
+  | { type: "agent.create"; payload: { name: string; icon: string; color: string; model?: string; agentType?: "local" | "cloud" } }
   | { type: "agent.delete"; payload: { lettaAgentId: string } }
   | { type: "agent.rename"; payload: { lettaAgentId: string; name: string } }
   | { type: "models.list" }
