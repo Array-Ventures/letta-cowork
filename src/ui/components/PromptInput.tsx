@@ -11,18 +11,30 @@ interface PromptInputProps {
   sendEvent: (event: ClientEvent) => void;
   onSendMessage?: () => void;
   disabled?: boolean;
+  sessionIdOverride?: string | null;
+  agentIdOverride?: string;
+  cwdOverride?: string;
+  compact?: boolean;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
+export function usePromptActions(
+  sendEvent: (event: ClientEvent) => void,
+  overrides?: { sessionId?: string | null; agentId?: string; cwd?: string }
+) {
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
-  const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const storeActiveSessionId = useAppStore((state) => state.activeSessionId);
   const sessions = useAppStore((state) => state.sessions);
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const setPrompt = useAppStore((state) => state.setPrompt);
   const setPendingStart = useAppStore((state) => state.setPendingStart);
   const setGlobalError = useAppStore((state) => state.setGlobalError);
+
+  // Use overrides when provided (e.g. artifact sidebar)
+  const activeSessionId = overrides?.sessionId !== undefined ? overrides.sessionId : storeActiveSessionId;
+  const agentId = overrides?.agentId ?? selectedAgentId;
+  const effectiveCwd = overrides?.cwd ?? cwd;
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const isRunning = activeSession?.status === "running";
@@ -35,7 +47,7 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       // Title will be set from conversation ID
       sendEvent({
         type: "session.start",
-        payload: { title: "", prompt, cwd: cwd.trim() || undefined, agentId: selectedAgentId || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS }
+        payload: { title: "", prompt, cwd: effectiveCwd.trim() || undefined, agentId: agentId || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS }
       });
       // Don't clear prompt yet - wait for modal to close to avoid UI flicker
     } else {
@@ -43,10 +55,10 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
         setGlobalError("Session is still running. Please wait for it to finish.");
         return;
       }
-      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: activeSession?.cwd  } });
+      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: effectiveCwd.trim() || activeSession?.cwd  } });
       setPrompt("");
     }
-  }, [activeSession, activeSessionId, cwd, prompt, selectedAgentId, sendEvent, setGlobalError, setPendingStart, setPrompt]);
+  }, [activeSession, activeSessionId, agentId, effectiveCwd, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
@@ -64,8 +76,11 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
   return { prompt, setPrompt, isRunning, handleSend, handleStop, handleStartFromModal };
 }
 
-export function PromptInput({ sendEvent, onSendMessage, disabled = false }: PromptInputProps) {
-  const { prompt, setPrompt, isRunning, handleSend, handleStop } = usePromptActions(sendEvent);
+export function PromptInput({ sendEvent, onSendMessage, disabled = false, sessionIdOverride, agentIdOverride, cwdOverride, compact = false }: PromptInputProps) {
+  const overrides = sessionIdOverride !== undefined || agentIdOverride !== undefined || cwdOverride !== undefined
+    ? { sessionId: sessionIdOverride, agentId: agentIdOverride, cwd: cwdOverride }
+    : undefined;
+  const { prompt, setPrompt, isRunning, handleSend, handleStop } = usePromptActions(sendEvent, overrides);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -114,8 +129,14 @@ export function PromptInput({ sendEvent, onSendMessage, disabled = false }: Prom
   }, [prompt]);
 
   return (
-    <section className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]">
-      <div className="mx-auto flex w-full max-w-full items-end gap-3 rounded-2xl border border-ink-900/10 bg-surface px-4 py-3 shadow-card lg:max-w-3xl">
+    <section className={compact
+      ? "border-t border-ink-900/10 bg-surface px-3 py-3"
+      : "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]"
+    }>
+      <div className={compact
+        ? "flex w-full items-end gap-2"
+        : "mx-auto flex w-full max-w-full items-end gap-3 rounded-2xl border border-ink-900/10 bg-surface px-4 py-3 shadow-card lg:max-w-3xl"
+      }>
         <textarea
           rows={1}
           className="flex-1 resize-none bg-transparent py-1.5 text-sm text-ink-800 placeholder:text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"

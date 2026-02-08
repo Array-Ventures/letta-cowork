@@ -1,6 +1,12 @@
 import { join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { createAgent } from "@letta-ai/letta-code-sdk";
+import { updateAgent } from "./letta-api.js";
+import { installSkillsForAgent } from "./skill-installer.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("agent-store");
 
 export type AgentEntry = {
   name: string;
@@ -64,4 +70,31 @@ export function renameAgent(lettaAgentId: string, newName: string): void {
     agent.name = newName;
     writeStore(data);
   }
+}
+
+/** Shared agent creation: SDK create → install skills → set name → save to store */
+export async function createAndSaveAgent(opts: {
+  name: string;
+  icon: string;
+  color: string;
+  model?: string;
+}): Promise<AgentEntry> {
+  const lettaAgentId = await createAgent(
+    opts.model ? { model: opts.model } : undefined
+  );
+  installSkillsForAgent(lettaAgentId);
+  await updateAgent(lettaAgentId, { name: opts.name }).catch((err) =>
+    log.warn("Failed to set agent name on server:", err)
+  );
+  log.debug("Created agent", { name: opts.name, lettaAgentId });
+  const entry: AgentEntry = {
+    name: opts.name,
+    lettaAgentId,
+    icon: opts.icon,
+    color: opts.color,
+    model: opts.model,
+    createdAt: new Date().toISOString(),
+  };
+  saveAgent(entry);
+  return entry;
 }

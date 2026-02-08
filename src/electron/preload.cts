@@ -24,9 +24,9 @@ electron.contextBridge.exposeInMainWorld("electron", {
         return () => electron.ipcRenderer.off("server-event", cb);
     },
 
-    getRecentCwds: (limit?: number) => 
+    getRecentCwds: (limit?: number) =>
         ipcInvoke("get-recent-cwds", limit),
-    selectDirectory: () => 
+    selectDirectory: () =>
         ipcInvoke("select-directory")
 } satisfies Window['electron'])
 

@@ -73,6 +73,20 @@ export type ModelInfo = {
   max_context_window: number;
 };
 
+// Artifacts
+export type ActiveView =
+  | { type: "home" }
+  | { type: "chat" }
+  | { type: "artifact"; artifactId: string; agentId?: string };
+
+export type ArtifactInfo = {
+  id: string;
+  name: string;
+  icon: string;
+  agentId?: string;
+  path?: string;
+};
+
 // Server -> Client events
 export type ServerEvent =
   | { type: "stream.message"; payload: { sessionId: string; message: StreamMessage } }
@@ -88,7 +102,10 @@ export type ServerEvent =
   | { type: "agent.created"; payload: AgentInfo }
   | { type: "agent.deleted"; payload: { lettaAgentId: string } }
   | { type: "agent.renamed"; payload: { lettaAgentId: string; name: string } }
-  | { type: "models.list"; payload: { models: ModelInfo[] } };
+  | { type: "models.list"; payload: { models: ModelInfo[] } }
+  | { type: "artifacts.list"; payload: { artifacts: ArtifactInfo[] } }
+  | { type: "artifact.created"; payload: { artifact: ArtifactInfo } }
+  | { type: "artifact.reload"; payload: { artifactId: string } };
 
 // Client -> Server events
 export type ClientEvent =
@@ -104,4 +121,7 @@ export type ClientEvent =
   | { type: "agent.delete"; payload: { lettaAgentId: string } }
   | { type: "agent.rename"; payload: { lettaAgentId: string; name: string } }
   | { type: "models.list" }
-  | { type: "approval.response"; payload: { sessionId: string; approvals: Array<{ tool_call_id: string; approve: boolean; reason?: string }> } };
+  | { type: "artifacts.list" }
+  | { type: "approval.response"; payload: { sessionId: string; approvals: Array<{ tool_call_id: string; approve: boolean; reason?: string }> } }
+  | { type: "artifact.create"; payload: { name: string; icon: string; agentIcon: string; agentColor: string; model?: string } }
+  | { type: "artifact.watch"; payload: { artifactId: string | null } };

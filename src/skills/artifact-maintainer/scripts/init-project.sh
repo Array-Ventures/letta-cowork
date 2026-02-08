@@ -6,10 +6,10 @@ set -e
 # Detect Node version
 NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
 
-echo "🔍 Detected Node.js version: $NODE_VERSION"
+echo "Detected Node.js version: $NODE_VERSION"
 
 if [ "$NODE_VERSION" -lt 18 ]; then
-  echo "❌ Error: Node.js 18 or higher is required"
+  echo "Error: Node.js 18 or higher is required"
   echo "   Current version: $(node -v)"
   exit 1
 fi
@@ -17,10 +17,10 @@ fi
 # Set Vite version based on Node version
 if [ "$NODE_VERSION" -ge 20 ]; then
   VITE_VERSION="latest"
-  echo "✅ Using Vite latest (Node 20+)"
+  echo "Using Vite latest (Node 20+)"
 else
   VITE_VERSION="5.4.11"
-  echo "✅ Using Vite $VITE_VERSION (Node 18 compatible)"
+  echo "Using Vite $VITE_VERSION (Node 18 compatible)"
 fi
 
 # Detect OS and set sed syntax
@@ -32,53 +32,60 @@ fi
 
 # Check if pnpm is installed
 if ! command -v pnpm &> /dev/null; then
-  echo "📦 pnpm not found. Installing pnpm..."
+  echo "pnpm not found. Installing pnpm..."
   npm install -g pnpm
 fi
 
-# Check if project name is provided
-if [ -z "$1" ]; then
-  echo "❌ Usage: ./create-react-shadcn-complete.sh <project-name>"
-  exit 1
-fi
-
-PROJECT_NAME="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPONENTS_TARBALL="$SCRIPT_DIR/shadcn-components.tar.gz"
 
 # Check if components tarball exists
 if [ ! -f "$COMPONENTS_TARBALL" ]; then
-  echo "❌ Error: shadcn-components.tar.gz not found in script directory"
+  echo "Error: shadcn-components.tar.gz not found in script directory"
   echo "   Expected location: $COMPONENTS_TARBALL"
   exit 1
 fi
 
-echo "🚀 Creating new React + Vite project: $PROJECT_NAME"
+# In-place mode (no arg) vs named project mode
+if [ -z "$1" ]; then
+  echo "Scaffolding React project in current directory..."
+  TEMP_DIR=".scaffold-temp"
+  pnpm create vite "$TEMP_DIR" --template react-ts
 
-# Create new Vite project (always use latest create-vite, pin vite version later)
-pnpm create vite "$PROJECT_NAME" --template react-ts
+  # Move scaffold files into cwd, preserving manifest.json and bundle.html
+  shopt -s dotglob
+  for item in "$TEMP_DIR"/*; do
+    base=$(basename "$item")
+    [ "$base" = "manifest.json" ] || [ "$base" = "bundle.html" ] && continue
+    mv "$item" .
+  done
+  shopt -u dotglob
+  rm -rf "$TEMP_DIR"
+else
+  PROJECT_NAME="$1"
+  echo "Creating new React + Vite project: $PROJECT_NAME"
+  pnpm create vite "$PROJECT_NAME" --template react-ts
+  cd "$PROJECT_NAME"
+fi
 
-# Navigate into project directory
-cd "$PROJECT_NAME"
-
-echo "🧹 Cleaning up Vite template..."
+echo "Cleaning up Vite template..."
 $SED_INPLACE '/<link rel="icon".*vite\.svg/d' index.html
-$SED_INPLACE 's/<title>.*<\/title>/<title>'"$PROJECT_NAME"'<\/title>/' index.html
+$SED_INPLACE 's/<title>.*<\/title>/<title>App<\/title>/' index.html
 
-echo "📦 Installing base dependencies..."
+echo "Installing base dependencies..."
 pnpm install
 
 # Pin Vite version for Node 18
 if [ "$NODE_VERSION" -lt 20 ]; then
-  echo "📌 Pinning Vite to $VITE_VERSION for Node 18 compatibility..."
+  echo "Pinning Vite to $VITE_VERSION for Node 18 compatibility..."
   pnpm add -D vite@$VITE_VERSION
 fi
 
-echo "📦 Installing Tailwind CSS and dependencies..."
+echo "Installing Tailwind CSS and dependencies..."
 pnpm install -D tailwindcss@3.4.1 postcss autoprefixer @types/node tailwindcss-animate
 pnpm install class-variance-authority clsx tailwind-merge lucide-react next-themes
 
-echo "⚙️  Creating Tailwind and PostCSS configuration..."
+echo "Creating Tailwind and PostCSS configuration..."
 cat > postcss.config.js << 'EOF'
 export default {
   plugins: {
@@ -88,7 +95,7 @@ export default {
 }
 EOF
 
-echo "📝 Configuring Tailwind with shadcn theme..."
+echo "Configuring Tailwind with shadcn theme..."
 cat > tailwind.config.js << 'EOF'
 /** @type {import('tailwindcss').Config} */
 module.exports = {
@@ -160,7 +167,7 @@ module.exports = {
 EOF
 
 # Add Tailwind directives and CSS variables to index.css
-echo "🎨 Adding Tailwind directives and CSS variables..."
+echo "Adding Tailwind directives and CSS variables..."
 cat > src/index.css << 'EOF'
 @tailwind base;
 @tailwind components;
@@ -169,47 +176,47 @@ cat > src/index.css << 'EOF'
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    --foreground: 0 0% 7.8%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 0 0% 7.8%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
+    --popover-foreground: 0 0% 7.8%;
+    --primary: 240 94.4% 34.9%;
     --primary-foreground: 0 0% 98%;
     --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
+    --secondary-foreground: 0 0% 7.8%;
     --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
+    --muted-foreground: 0 0% 54.9%;
+    --accent: 240 40% 94.1%;
+    --accent-foreground: 240 94.4% 34.9%;
+    --destructive: 342 76.9% 43.1%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
+    --border: 0 0% 91%;
+    --input: 0 0% 91%;
+    --ring: 240 94.4% 34.9%;
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --background: 0 0% 11.4%;
+    --foreground: 0 0% 83.9%;
+    --card: 0 0% 11.4%;
+    --card-foreground: 0 0% 83.9%;
+    --popover: 0 0% 11.4%;
+    --popover-foreground: 0 0% 83.9%;
+    --primary: 15 100% 69.8%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 12.9%;
+    --secondary-foreground: 0 0% 83.9%;
+    --muted: 0 0% 12.9%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 14 16.5% 20.4%;
+    --accent-foreground: 15 100% 69.8%;
+    --destructive: 0 100% 70.8%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
+    --border: 0 0% 16.9%;
+    --input: 0 0% 16.9%;
+    --ring: 15 100% 69.8%;
   }
 }
 
@@ -224,7 +231,7 @@ cat > src/index.css << 'EOF'
 EOF
 
 # Add path aliases to tsconfig.json
-echo "🔧 Adding path aliases to tsconfig.json..."
+echo "Adding path aliases to tsconfig.json..."
 node -e "
 const fs = require('fs');
 const config = JSON.parse(fs.readFileSync('tsconfig.json', 'utf8'));
@@ -235,7 +242,7 @@ fs.writeFileSync('tsconfig.json', JSON.stringify(config, null, 2));
 "
 
 # Add path aliases to tsconfig.app.json
-echo "🔧 Adding path aliases to tsconfig.app.json..."
+echo "Adding path aliases to tsconfig.app.json..."
 node -e "
 const fs = require('fs');
 const path = 'tsconfig.app.json';
@@ -251,7 +258,7 @@ fs.writeFileSync(path, JSON.stringify(config, null, 2));
 "
 
 # Update vite.config.ts
-echo "⚙️  Updating Vite configuration..."
+echo "Updating Vite configuration..."
 cat > vite.config.ts << 'EOF'
 import path from "path";
 import react from "@vitejs/plugin-react";
@@ -268,16 +275,16 @@ export default defineConfig({
 EOF
 
 # Install all shadcn/ui dependencies
-echo "📦 Installing shadcn/ui dependencies..."
+echo "Installing shadcn/ui dependencies..."
 pnpm install @radix-ui/react-accordion @radix-ui/react-aspect-ratio @radix-ui/react-avatar @radix-ui/react-checkbox @radix-ui/react-collapsible @radix-ui/react-context-menu @radix-ui/react-dialog @radix-ui/react-dropdown-menu @radix-ui/react-hover-card @radix-ui/react-label @radix-ui/react-menubar @radix-ui/react-navigation-menu @radix-ui/react-popover @radix-ui/react-progress @radix-ui/react-radio-group @radix-ui/react-scroll-area @radix-ui/react-select @radix-ui/react-separator @radix-ui/react-slider @radix-ui/react-slot @radix-ui/react-switch @radix-ui/react-tabs @radix-ui/react-toast @radix-ui/react-toggle @radix-ui/react-toggle-group @radix-ui/react-tooltip
 pnpm install sonner cmdk vaul embla-carousel-react react-day-picker react-resizable-panels date-fns react-hook-form @hookform/resolvers zod
 
 # Extract shadcn components from tarball
-echo "📦 Extracting shadcn/ui components..."
+echo "Extracting shadcn/ui components..."
 tar -xzf "$COMPONENTS_TARBALL" -C src/
 
 # Create components.json for reference
-echo "📝 Creating components.json config..."
+echo "Creating components.json config..."
 cat > components.json << 'EOF'
 {
   "$schema": "https://ui.shadcn.com/schema.json",
@@ -301,22 +308,38 @@ cat > components.json << 'EOF'
 }
 EOF
 
-echo "✅ Setup complete! You can now use Tailwind CSS and shadcn/ui in your project."
+# Add theme listener to index.html for iframe theme sync
+echo "Adding theme listener to index.html..."
+$SED_INPLACE 's|</body>|<script>window.addEventListener("message",e=>{if(e.data?.type==="theme")document.body.classList.toggle("dark",e.data.value==="dark")})</script>\n</body>|' index.html
+
+# Replace default Vite App.tsx with artifact placeholder
+echo "Creating artifact placeholder App.tsx..."
+cat > src/App.tsx << 'APPEOF'
+export default function App() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+      <div className="text-center space-y-2">
+        <h1 className="text-2xl font-semibold">Ready to build</h1>
+        <p className="text-sm text-muted-foreground">
+          Tell your maintainer agent what to create.
+        </p>
+      </div>
+    </div>
+  )
+}
+APPEOF
+
+# Clean up unnecessary Vite default files
+rm -f src/App.css src/assets/react.svg public/vite.svg
+
 echo ""
-echo "📦 Included components (40+ total):"
-echo "  - accordion, alert, aspect-ratio, avatar, badge, breadcrumb"
-echo "  - button, calendar, card, carousel, checkbox, collapsible"
-echo "  - command, context-menu, dialog, drawer, dropdown-menu"
-echo "  - form, hover-card, input, label, menubar, navigation-menu"
-echo "  - popover, progress, radio-group, resizable, scroll-area"
-echo "  - select, separator, sheet, skeleton, slider, sonner"
-echo "  - switch, table, tabs, textarea, toast, toggle, toggle-group, tooltip"
+echo "Setup complete! React + Tailwind + shadcn/ui project ready."
 echo ""
-echo "To start developing:"
-echo "  cd $PROJECT_NAME"
-echo "  pnpm dev"
+echo "43 shadcn/ui components available in src/components/ui/"
 echo ""
-echo "📚 Import components like:"
+echo "Import components like:"
 echo "  import { Button } from '@/components/ui/button'"
 echo "  import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'"
 echo "  import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog'"
+echo ""
+echo "Run 'bash scripts/bundle.sh' to produce bundle.html"

@@ -1,7 +1,9 @@
 import { BrowserWindow } from "electron";
 import type { ClientEvent, ServerEvent } from "./types.js";
 import { runLetta, type RunnerHandle } from "./libs/runner.js";
-import type { PendingPermission } from "./libs/runtime-state.js";
+import { createLogger } from "./libs/logger.js";
+
+const log = createLogger("ipc");
 import {
   createRuntimeSession,
   getSession,
@@ -20,17 +22,21 @@ import {
   type Conversation,
 } from "./libs/letta-api.js";
 import { getLettaClient } from "./libs/letta-client.js";
-import { createAgent } from "@letta-ai/letta-code-sdk";
 import {
   loadAgents,
-  saveAgent,
   deleteAgent as deleteAgentFromStore,
   renameAgent as renameAgentInStore,
+  createAndSaveAgent,
 } from "./libs/agent-store.js";
-import { installSkillsForAgent } from "./libs/skill-installer.js";
+import { listArtifacts, ensureArtifactAgents, createArtifact, getArtifactBundlePath } from "./libs/artifact-store.js";
+import { watch, type FSWatcher } from "node:fs";
+import { dirname, basename } from "node:path";
 
 // Track active runner handles
 const runnerHandles = new Map<string, RunnerHandle>();
+
+// Track active file watcher for artifact live reload
+let activeArtifactWatcher: FSWatcher | null = null;
 
 // After SDK run completes (or after approval response), fetch the true state from REST
 // and push it to the UI. This replaces ephemeral SDK stream messages with canonical data.
@@ -51,12 +57,13 @@ async function emitSessionRefresh(conversationId: string) {
     // Use oldest message ID as cursor for scroll-up pagination
     const cursor = apiMsgs.length > 0 ? apiMsgs[apiMsgs.length - 1].id : undefined;
 
+    log.debug("emitSessionRefresh", { conversationId, messageCount: messages.length, status, hasPendingApproval });
     emit({
       type: "session.refresh",
       payload: { sessionId: conversationId, messages, cursor, hasMore, status, hasPendingApproval },
     });
   } catch (error) {
-    console.error("Failed to refresh session after run:", error);
+    log.error("Failed to refresh session after run:", error);
   }
 }
 
@@ -106,8 +113,56 @@ export async function handleClientEvent(event: ClientEvent) {
         }));
       emit({ type: "models.list", payload: { models: llmModels } });
     } catch (error) {
-      console.error("Failed to fetch models:", error);
+      log.error("Failed to fetch models:", error);
       emit({ type: "models.list", payload: { models: [] } });
+    }
+    return;
+  }
+
+  // Artifacts
+  if (event.type === "artifacts.list") {
+    await ensureArtifactAgents();
+    const artifacts = listArtifacts();
+    emit({ type: "artifacts.list", payload: { artifacts } });
+    // Refresh agent list since new agents may have been created
+    const agents = loadAgents();
+    emit({ type: "agent.list", payload: { agents } });
+    return;
+  }
+
+  if (event.type === "artifact.create") {
+    try {
+      const artifact = await createArtifact(event.payload);
+      emit({ type: "artifact.created", payload: { artifact } });
+      // Refresh both lists
+      emit({ type: "artifacts.list", payload: { artifacts: listArtifacts() } });
+      emit({ type: "agent.list", payload: { agents: loadAgents() } });
+    } catch (error) {
+      emit({ type: "runner.error", payload: { message: `Failed to create app: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "artifact.watch") {
+    // Clean up previous watcher
+    if (activeArtifactWatcher) {
+      activeArtifactWatcher.close();
+      activeArtifactWatcher = null;
+    }
+
+    if (event.payload.artifactId) {
+      const bundlePath = getArtifactBundlePath(event.payload.artifactId);
+      if (bundlePath) {
+        // Watch the directory, not the file — atomic mv replaces the inode,
+        // which breaks fs.watch on the file after the first replacement.
+        const dir = dirname(bundlePath);
+        const filename = basename(bundlePath);
+        activeArtifactWatcher = watch(dir, (_eventType, changedFile) => {
+          if (changedFile === filename) {
+            emit({ type: "artifact.reload", payload: { artifactId: event.payload.artifactId! } });
+          }
+        });
+      }
     }
     return;
   }
@@ -121,27 +176,15 @@ export async function handleClientEvent(event: ClientEvent) {
 
   if (event.type === "agent.create") {
     try {
-      const lettaAgentId = await createAgent(
-        event.payload.model ? { model: event.payload.model } : undefined
-      );
-      // Install bundled skills (e.g. web-artifacts-builder) into agent's skill directory
-      installSkillsForAgent(lettaAgentId);
-      // SDK creates agents as "Nameless Agent" — set the user's chosen name via REST API
-      await updateAgent(lettaAgentId, { name: event.payload.name }).catch((err) =>
-        console.warn("Failed to set agent name on server:", err)
-      );
-      const entry = {
+      const entry = await createAndSaveAgent({
         name: event.payload.name,
-        lettaAgentId,
         icon: event.payload.icon,
         color: event.payload.color,
         model: event.payload.model,
-        createdAt: new Date().toISOString(),
-      };
-      saveAgent(entry);
+      });
       emit({ type: "agent.created", payload: entry });
     } catch (error) {
-      console.error("Failed to create agent:", error);
+      log.error("Failed to create agent:", error);
       emit({ type: "runner.error", payload: { message: `Failed to create agent: ${error}` } });
     }
     return;
@@ -156,7 +199,7 @@ export async function handleClientEvent(event: ClientEvent) {
   if (event.type === "agent.rename") {
     renameAgentInStore(event.payload.lettaAgentId, event.payload.name);
     await updateAgent(event.payload.lettaAgentId, { name: event.payload.name }).catch((err) =>
-      console.warn("Failed to sync agent rename to server:", err)
+      log.warn("Failed to sync agent rename to server:", err)
     );
     emit({ type: "agent.renamed", payload: { lettaAgentId: event.payload.lettaAgentId, name: event.payload.name } });
     return;
@@ -176,7 +219,7 @@ export async function handleClientEvent(event: ClientEvent) {
       for (let i = 0; i < agents.length; i++) {
         const result = results[i];
         if (result.status !== "fulfilled") {
-          console.error(`Failed to fetch conversations for agent ${agents[i].lettaAgentId}:`, result.reason);
+          log.error(`Failed to fetch conversations for agent ${agents[i].lettaAgentId}:`, result.reason);
           continue;
         }
         for (const conv of result.value) {
@@ -202,9 +245,10 @@ export async function handleClientEvent(event: ClientEvent) {
         };
       });
 
+      log.debug("session.list", { agentCount: agents.length, conversationCount: allConvs.length });
       emit({ type: "session.list", payload: { sessions: allSessions } });
     } catch (error) {
-      console.error("Failed to list sessions:", error);
+      log.error("Failed to list sessions:", error);
       emit({ type: "session.list", payload: { sessions: [] } });
     }
     return;
@@ -213,6 +257,7 @@ export async function handleClientEvent(event: ClientEvent) {
   if (event.type === "session.history") {
     const { sessionId: conversationId, before, limit } = event.payload;
     const isScrollUp = !!before;
+    log.debug("session.history", { conversationId, before, limit, isScrollUp });
 
     try {
       const [{ items: apiMsgs, hasMore }, lastRun] = await Promise.all([
@@ -240,7 +285,7 @@ export async function handleClientEvent(event: ClientEvent) {
         });
       }
     } catch (error) {
-      console.error(`Failed to fetch history for ${conversationId}:`, error);
+      log.error(`Failed to fetch history for ${conversationId}:`, error);
       const status = getSession(conversationId)?.status || "idle";
       emit({
         type: "session.history",
@@ -251,12 +296,11 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.start") {
-    const pendingPermissions = new Map<string, PendingPermission>();
-
+    log.debug("session.start", { agentId: event.payload.agentId, promptLength: event.payload.prompt.length });
     try {
       let conversationId: string | null = null;
       let handle: RunnerHandle | null = null;
-      
+
       handle = await runLetta({
         prompt: event.payload.prompt,
         agentId: event.payload.agentId,
@@ -265,7 +309,6 @@ export async function handleClientEvent(event: ClientEvent) {
           title: event.payload.title,
           status: "running",
           cwd: event.payload.cwd,
-          pendingPermissions,
         },
         onEvent: (e) => {
           // Use conversationId for all events
@@ -298,7 +341,7 @@ export async function handleClientEvent(event: ClientEvent) {
         onComplete: (convId) => emitSessionRefresh(convId),
       });
     } catch (error) {
-      console.error("Failed to start session:", error);
+      log.error("Failed to start session:", error);
       emit({
         type: "runner.error",
         payload: { message: String(error) },
@@ -308,6 +351,7 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.continue") {
+    log.debug("session.continue", { conversationId: event.payload.sessionId });
     const conversationId = event.payload.sessionId;
     let runtimeSession = getSession(conversationId);
     
@@ -334,7 +378,6 @@ export async function handleClientEvent(event: ClientEvent) {
           title: conversationId,
           status: "running",
           cwd: event.payload.cwd,
-          pendingPermissions: runtimeSession.pendingPermissions,
         },
         resumeConversationId: conversationId,
         onEvent: emit,
@@ -384,6 +427,7 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "approval.response") {
+    log.debug("approval.response", { sessionId: event.payload.sessionId, approvalCount: event.payload.approvals.length });
     const { sessionId, approvals } = event.payload;
 
     emit({
@@ -396,7 +440,7 @@ export async function handleClientEvent(event: ClientEvent) {
       // After approval, refresh from REST to get the true state
       await emitSessionRefresh(sessionId);
     } catch (error) {
-      console.error("Failed to send approval response:", error);
+      log.error("Failed to send approval response:", error);
       emit({
         type: "session.status",
         payload: { sessionId, status: "error", error: String(error) },
@@ -405,16 +449,6 @@ export async function handleClientEvent(event: ClientEvent) {
     return;
   }
 
-  if (event.type === "permission.response") {
-    const session = getSession(event.payload.sessionId);
-    if (!session) return;
-
-    const pending = session.pendingPermissions.get(event.payload.toolUseId);
-    if (pending) {
-      pending.resolve(event.payload.result);
-    }
-    return;
-  }
 }
 
 export function cleanupAllSessions(): void {

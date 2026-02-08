@@ -3,22 +3,12 @@
  * No persistence needed - Letta handles conversation/message storage.
  */
 
-import type { CanUseToolResponse } from "../types.js";
-
-export type PendingPermission = {
-  toolUseId: string;
-  toolName: string;
-  input: unknown;
-  resolve: (result: CanUseToolResponse) => void;
-};
-
 export type SessionStatus = "idle" | "running" | "completed" | "error";
 
 export type RuntimeSession = {
   conversationId: string;
   agentId?: string;
   status: SessionStatus;
-  pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
 };
 
@@ -29,7 +19,6 @@ export function createRuntimeSession(conversationId: string): RuntimeSession {
   const session: RuntimeSession = {
     conversationId,
     status: "idle",
-    pendingPermissions: new Map(),
   };
   sessions.set(conversationId, session);
   return session;

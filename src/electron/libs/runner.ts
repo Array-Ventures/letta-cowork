@@ -3,10 +3,11 @@ import {
   resumeSession,
   type Session as LettaSession,
   type SDKMessage,
-  type CanUseToolResponse,
 } from "@letta-ai/letta-code-sdk";
 import type { ServerEvent } from "../types.js";
-import type { PendingPermission } from "./runtime-state.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("runner");
 
 // Simplified session type for runner
 export type RunnerSession = {
@@ -14,7 +15,6 @@ export type RunnerSession = {
   title: string;
   status: string;
   cwd?: string;
-  pendingPermissions: Map<string, PendingPermission>;
 };
 
 export type RunnerOptions = {
@@ -49,64 +49,26 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
     });
   };
 
-  const sendPermissionRequest = (toolUseId: string, toolName: string, input: unknown) => {
-    onEvent({
-      type: "permission.request",
-      payload: { sessionId: currentSessionId, toolUseId, toolName, input }
-    });
-  };
-
   // Start the query in the background
   (async () => {
     try {
-      // Common options for canUseTool
-      const promptUser = (toolName: string, input: unknown) => {
-        const toolUseId = crypto.randomUUID();
-        sendPermissionRequest(toolUseId, toolName, input);
-        return new Promise<CanUseToolResponse>((resolve) => {
-          session.pendingPermissions.set(toolUseId, {
-            toolUseId,
-            toolName,
-            input,
-            resolve: (result) => {
-              session.pendingPermissions.delete(toolUseId);
-              resolve(result);
-            }
-          });
-        });
-      };
-
-      const canUseTool = async (toolName: string, input: unknown) => {
-        // Bash → always ask user
-        if (toolName === "Bash") {
-          return promptUser(toolName, input);
-        }
-        // AskUserQuestion → route to user
-        if (toolName === "AskUserQuestion") {
-          return promptUser(toolName, input);
-        }
-        // Everything else → auto-approve
-        return { behavior: "allow" as const };
-      };
-
       // Session options
       const sessionOptions = {
         cwd: session.cwd ?? DEFAULT_CWD,
-        permissionMode: "default" as const,
-        canUseTool,
+        permissionMode: "bypassPermissions" as const,
       };
 
       // Create or resume session
       let lettaSession: LettaSession;
 
       if (resumeConversationId) {
-        // Resume specific conversation
+        log.debug("Resuming session", { conversationId: resumeConversationId });
         lettaSession = resumeSession(resumeConversationId, sessionOptions);
       } else if (agentId) {
-        // New conversation on existing agent
+        log.debug("Creating new session", { agentId });
         lettaSession = createSession(agentId, sessionOptions);
       } else {
-        // Fallback - no agent specified
+        log.debug("Creating session without agent");
         lettaSession = createSession(undefined, sessionOptions);
       }
 
@@ -115,6 +77,8 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
 
       // Send the prompt (triggers init internally)
       await lettaSession.send(prompt);
+
+      log.debug("Prompt sent, session initialized", { conversationId: lettaSession.conversationId, agentId: lettaSession.agentId });
 
       // Now initialized - update sessionId and cache agentId
       if (lettaSession.conversationId) {
@@ -140,6 +104,8 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
         }
       }
 
+      log.debug("Stream ended", { conversationId: currentSessionId });
+
       // Query completed normally
       if (session.status === "running") {
         onEvent({
@@ -149,9 +115,10 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") {
-        // Session was aborted, don't treat as error
+        log.debug("Session aborted", { conversationId: currentSessionId });
         return;
       }
+      log.error("Runner error", { conversationId: currentSessionId, error: String(error) });
       onEvent({
         type: "session.status",
         payload: { sessionId: currentSessionId, status: "error", title: currentSessionId, error: String(error) }

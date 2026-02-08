@@ -10,6 +10,9 @@ import type { Run } from "@letta-ai/letta-client/resources/agents/messages.js";
 import type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations.js";
 import type { ToolReturnMessage } from "@letta-ai/letta-client/resources/tools.js";
 import { getLettaClient } from "./letta-client.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("letta-api");
 
 // Re-export SDK types used by ipc-handlers
 export type { Run, Conversation, Message };
@@ -23,12 +26,16 @@ export async function fetchLastRun(conversationId: string): Promise<Run | null> 
     limit: 1,
     order: "desc",
   });
-  return page.items[0] ?? null;
+  const run = page.items[0] ?? null;
+  log.debug("fetchLastRun", { conversationId, status: run?.status, stopReason: run?.stop_reason });
+  return run;
 }
 
 export async function fetchConversations(agentId: string): Promise<Conversation[]> {
   const client = getLettaClient();
-  return client.conversations.list({ agent_id: agentId });
+  const convos = await client.conversations.list({ agent_id: agentId });
+  log.debug("fetchConversations", { agentId, count: convos.length });
+  return convos;
 }
 
 export async function fetchMessagePage(
@@ -44,6 +51,7 @@ export async function fetchMessagePage(
   // SDK's hasNextPage() returns true as long as items exist (can't detect last page
   // without an extra fetch), so also check if we got fewer items than requested.
   const hasMore = page.items.length >= limit && page.hasNextPage();
+  log.debug("fetchMessagePage", { conversationId, before: options?.before, items: page.items.length, hasMore });
   return { items: page.items, hasMore };
 }
 
@@ -59,6 +67,7 @@ export async function sendApprovalResponse(
   const client = getLettaClient();
   // Need agentId — retrieve from conversation
   const conv = await client.conversations.retrieve(conversationId);
+  log.debug("sendApprovalResponse", { conversationId, approvalCount: approvals.length });
   const response = await client.agents.messages.create(conv.agent_id, {
     messages: [{
       type: "approval" as const,
@@ -216,10 +225,11 @@ export function transformLettaMessages(apiMessages: Message[], pendingRunId?: st
         break;
 
       default:
-        console.warn(`Unknown Letta message type: ${messageType}`);
+        log.warn(`Unknown Letta message type: ${messageType}`);
         break;
     }
   }
 
+  log.debug("transformLettaMessages", { input: apiMessages.length, output: transformed.length });
   return transformed;
 }

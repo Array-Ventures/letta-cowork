@@ -3,14 +3,17 @@ import { homedir } from "node:os";
 import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDev } from "../util.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("skill-installer");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 function getSkillsDir(): string {
   if (isDev()) {
-    // Dev: src/skills/ relative to dist-electron/libs/
-    return join(__dirname, "../../src/skills");
+    // Dev: src/skills/ relative to dist-electron/electron/libs/
+    return join(__dirname, "../../../src/skills");
   }
   // Production: extraResources/skills (copied by electron-builder)
   return join(process.resourcesPath, "skills");
@@ -22,7 +25,7 @@ export function installSkillsForAgent(agentId: string): void {
   const agentSkillsDir = join(homedir(), ".letta", "agents", agentId, "skills");
 
   if (!existsSync(skillsDir)) {
-    console.warn("[skill-installer] Bundled skills directory not found:", skillsDir);
+    log.warn("Bundled skills directory not found:", skillsDir);
     return;
   }
 
@@ -39,6 +42,6 @@ export function installSkillsForAgent(agentId: string): void {
     if (existsSync(dest)) continue; // already installed
 
     cpSync(src, dest, { recursive: true });
-    console.log(`[skill-installer] Installed skill "${entry.name}" for agent ${agentId}`);
+    log.info(`Installed skill "${entry.name}" for agent ${agentId}`);
   }
 }

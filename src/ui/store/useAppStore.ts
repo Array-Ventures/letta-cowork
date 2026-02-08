@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ServerEvent, SessionStatus, StreamMessage, AgentInfo, ModelInfo } from "../types";
+import type { ServerEvent, SessionStatus, StreamMessage, AgentInfo, ModelInfo, ActiveView, ArtifactInfo } from "../types";
 
 export type PermissionRequest = {
   toolUseId: string;
@@ -30,8 +30,12 @@ interface AppState {
   sessions: Record<string, SessionView>;
   agents: AgentInfo[];
   models: ModelInfo[];
+  artifacts: ArtifactInfo[];
+  artifactReloadCounter: number;
   selectedAgentId: string | null;
   activeSessionId: string | null;
+  artifactSessionId: string | null;
+  activeView: ActiveView;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -47,6 +51,8 @@ interface AppState {
   setGlobalError: (error: string | null) => void;
   setShowStartModal: (show: boolean) => void;
   setActiveSessionId: (id: string | null) => void;
+  setActiveView: (view: ActiveView) => void;
+  setArtifactSessionId: (id: string | null) => void;
   setAgents: (agents: AgentInfo[]) => void;
   setSelectedAgent: (agentId: string | null) => void;
   markHistoryRequested: (sessionId: string) => void;
@@ -64,8 +70,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
   agents: [],
   models: [],
+  artifacts: [],
+  artifactReloadCounter: 0,
   selectedAgentId: null,
   activeSessionId: null,
+  artifactSessionId: null,
+  activeView: { type: "home" } as ActiveView,
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -80,7 +90,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPendingStart: (pendingStart) => set({ pendingStart }),
   setGlobalError: (globalError) => set({ globalError }),
   setShowStartModal: (showStartModal) => set({ showStartModal }),
-  setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setActiveSessionId: (id) => set({ activeSessionId: id, activeView: { type: "chat" }, artifactSessionId: null }),
+  setActiveView: (activeView) => {
+    if (activeView.type === "artifact" && activeView.agentId) {
+      // Find most recent session for this artifact's agent
+      const sessions = Object.values(get().sessions);
+      const agentSessions = sessions
+        .filter((s) => s.agentId === activeView.agentId)
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      set({ activeView, artifactSessionId: agentSessions[0]?.id ?? null });
+    } else {
+      set({ activeView, artifactSessionId: null });
+    }
+  },
+  setArtifactSessionId: (artifactSessionId) => set({ artifactSessionId }),
   setAgents: (agents) => set({ agents }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
 
@@ -259,6 +282,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 hasMore: hasMore ?? existing.hasMore,
                 status,
                 hasPendingApproval,
+                hydrated: true,
               }
             }
           };
@@ -279,15 +303,24 @@ export const useAppStore = create<AppState>((set, get) => ({
                 title: title ?? existing.title,
                 cwd: cwd ?? existing.cwd,
                 agentId: agentId ?? existing.agentId,
-                updatedAt: Date.now()
+                updatedAt: Date.now(),
+                // New sessions from pendingStart get data from stream + session.refresh,
+                // so skip REST hydration to avoid clearing in-progress streamMessages.
+                hydrated: state.pendingStart ? true : existing.hydrated,
               }
             }
           };
         });
 
         if (state.pendingStart) {
-          get().setActiveSessionId(sessionId);
-          set({ pendingStart: false, showStartModal: false, prompt: "" });
+          const av = state.activeView;
+          if (av.type === "artifact" && av.agentId && agentId === av.agentId) {
+            // New session started for artifact's agent — route to artifact sidebar
+            set({ artifactSessionId: sessionId, pendingStart: false, prompt: "" });
+          } else {
+            get().setActiveSessionId(sessionId);
+            set({ pendingStart: false, showStartModal: false, prompt: "" });
+          }
         }
         break;
       }
@@ -449,6 +482,26 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       case "models.list": {
         set({ models: event.payload.models });
+        break;
+      }
+
+      case "artifacts.list": {
+        set({ artifacts: event.payload.artifacts });
+        break;
+      }
+
+      case "artifact.created": {
+        set((state) => ({
+          artifacts: [...state.artifacts, event.payload.artifact],
+          activeView: { type: "artifact", artifactId: event.payload.artifact.id, agentId: event.payload.artifact.agentId },
+        }));
+        break;
+      }
+
+      case "artifact.reload": {
+        set((state) => ({
+          artifactReloadCounter: state.artifactReloadCounter + 1,
+        }));
         break;
       }
     }

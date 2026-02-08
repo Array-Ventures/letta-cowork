@@ -127,26 +127,41 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
 };
 
 // Assistant Message Card
-const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssistantMessage; showIndicator?: boolean }) => (
+const AssistantCard = ({ message, showIndicator = false, agentName }: { message: SDKAssistantMessage; showIndicator?: boolean; agentName?: string }) => (
   <div className="flex flex-col mt-4">
     <div className="header text-accent flex items-center gap-2">
       <StatusDot variant="success" isActive={showIndicator} isVisible />
-      Assistant
+      {agentName || "Assistant"}
     </div>
     <MDContent text={message.content} />
   </div>
 );
 
-// Reasoning Card
-const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoningMessage; showIndicator?: boolean }) => (
-  <div className="flex flex-col mt-4">
-    <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="muted" isActive={showIndicator} isVisible />
-      Thinking
+// Reasoning Card (collapsible — expanded while streaming, auto-collapses after)
+const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoningMessage; showIndicator?: boolean }) => {
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
+  const isExpanded = userToggled ?? showIndicator;
+
+  return (
+    <div className="flex flex-col mt-4">
+      <button
+        className="header text-accent flex items-center gap-2 cursor-pointer hover:opacity-80 text-left"
+        onClick={() => setUserToggled(isExpanded ? false : true)}
+      >
+        <StatusDot variant="muted" isActive={showIndicator} isVisible />
+        Thinking
+        <svg
+          viewBox="0 0 24 24"
+          className={`h-3 w-3 text-muted transition-transform ${isExpanded ? "rotate-0" : "-rotate-90"}`}
+          fill="none" stroke="currentColor" strokeWidth="2"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {isExpanded && <MDContent text={message.content} />}
     </div>
-    <MDContent text={message.content} />
-  </div>
-);
+  );
+};
 
 // Tool Call Card
 const ToolCallCard = ({ 
@@ -295,12 +310,14 @@ export function MessageCard({
   message,
   isLast = false,
   isRunning = false,
+  agentName,
   permissionRequest,
   onPermissionResult,
 }: {
   message: StreamMessage;
   isLast?: boolean;
   isRunning?: boolean;
+  agentName?: string;
   permissionRequest?: PermissionRequest;
   onPermissionResult?: (toolUseId: string, result: CanUseToolResponse) => void;
 }) {
@@ -324,7 +341,7 @@ export function MessageCard({
       return <InitCard message={sdkMessage} showIndicator={showIndicator} />;
     
     case "assistant":
-      return <AssistantCard message={sdkMessage} showIndicator={showIndicator} />;
+      return <AssistantCard message={sdkMessage} showIndicator={showIndicator} agentName={agentName} />;
     
     case "reasoning":
       return <ReasoningCard message={sdkMessage} showIndicator={showIndicator} />;
