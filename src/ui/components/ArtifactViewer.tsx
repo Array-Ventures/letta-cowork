@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/useAppStore";
 import { AgentChatSidebar } from "./AgentChatSidebar";
 
@@ -13,9 +14,9 @@ interface ArtifactViewerProps {
 export function ArtifactViewer({ artifactId, sendEvent, partialMessage = "", showPartialMessage = false }: ArtifactViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeKey, setIframeKey] = useState(0);
-  const artifacts = useAppStore((s) => s.artifacts);
-  const agents = useAppStore((s) => s.agents);
-  const artifactReloadCounter = useAppStore((s) => s.artifactReloadCounter);
+  const { artifacts, agents, artifactReloadCounter } = useAppStore(
+    useShallow((s) => ({ artifacts: s.artifacts, agents: s.agents, artifactReloadCounter: s.artifactReloadCounter }))
+  );
   const artifact = artifacts.find((a) => a.id === artifactId);
   const artifactAgent = artifact?.agentId
     ? agents.find((a) => a.lettaAgentId === artifact.agentId)

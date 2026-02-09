@@ -8,7 +8,7 @@ export type SessionStatus = "idle" | "running" | "completed" | "error";
 export type RuntimeSession = {
   conversationId: string;
   agentId?: string;
-  agentType?: "local" | "cloud";
+  mode?: "local" | "cloud";
   status: SessionStatus;
   abortController?: AbortController;
 };

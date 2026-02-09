@@ -4,7 +4,8 @@ interface StartSessionModalProps {
   cwd: string;
   prompt: string;
   pendingStart: boolean;
-  agentType?: "local" | "cloud";
+  mode: "local" | "cloud";
+  onModeChange: (mode: "local" | "cloud") => void;
   onCwdChange: (value: string) => void;
   onPromptChange: (value: string) => void;
   onStart: () => void;
@@ -15,13 +16,14 @@ export function StartSessionModal({
   cwd,
   prompt,
   pendingStart,
-  agentType,
+  mode,
+  onModeChange,
   onCwdChange,
   onPromptChange,
   onStart,
   onClose
 }: StartSessionModalProps) {
-  const isCloud = agentType === "cloud";
+  const isCloud = mode === "cloud";
   const [recentCwds, setRecentCwds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -48,6 +50,39 @@ export function StartSessionModal({
           {isCloud ? "Start a new cloud session." : "Create a new session to start interacting with agent."}
         </p>
         <div className="mt-5 grid gap-4">
+          {/* Mode Toggle */}
+          <div className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted">Environment</span>
+            <div className="flex rounded-xl border border-ink-900/10 bg-surface-secondary p-1">
+              <button
+                type="button"
+                onClick={() => onModeChange("cloud")}
+                className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  mode === "cloud"
+                    ? "bg-surface text-ink-800 shadow-sm"
+                    : "text-muted hover:text-ink-600"
+                }`}
+              >
+                Cloud
+              </button>
+              <button
+                type="button"
+                onClick={() => onModeChange("local")}
+                className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  mode === "local"
+                    ? "bg-surface text-ink-800 shadow-sm"
+                    : "text-muted hover:text-ink-600"
+                }`}
+              >
+                Local
+              </button>
+            </div>
+            <span className="text-[11px] text-muted-light">
+              {isCloud
+                ? "Tools run in a Daytona cloud sandbox"
+                : "Tools run on your machine"}
+            </span>
+          </div>
           {!isCloud && (
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-muted">Working Directory</span>

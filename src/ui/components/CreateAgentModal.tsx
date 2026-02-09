@@ -22,7 +22,7 @@ const AGENT_COLORS = [
 
 interface CreateAgentModalProps {
   onClose: () => void;
-  onCreate: (name: string, icon: string, color: string, model?: string, agentType?: "local" | "cloud") => void;
+  onCreate: (name: string, icon: string, color: string, model?: string) => void;
   models: ModelInfo[];
   loadingModels: boolean;
 }
@@ -32,7 +32,6 @@ export function CreateAgentModal({ onClose, onCreate, models, loadingModels }: C
   const [selectedIcon, setSelectedIcon] = useState(AGENT_ICONS[0].name);
   const [selectedColor, setSelectedColor] = useState(AGENT_COLORS[0]);
   const [selectedModel, setSelectedModel] = useState("");
-  const [agentType, setAgentType] = useState<"local" | "cloud">("local");
 
   // Auto-select first model when loaded
   useEffect(() => {
@@ -43,7 +42,7 @@ export function CreateAgentModal({ onClose, onCreate, models, loadingModels }: C
 
   const handleCreate = () => {
     if (!name.trim()) return;
-    onCreate(name.trim(), selectedIcon, selectedColor, selectedModel || undefined, agentType);
+    onCreate(name.trim(), selectedIcon, selectedColor, selectedModel || undefined);
   };
 
   return (
@@ -109,40 +108,6 @@ export function CreateAgentModal({ onClose, onCreate, models, loadingModels }: C
               </select>
             )}
           </label>
-
-          {/* Environment Toggle */}
-          <div className="grid gap-1.5">
-            <span className="text-xs font-medium text-muted">Environment</span>
-            <div className="flex rounded-xl border border-ink-900/10 bg-surface-secondary p-1">
-              <button
-                type="button"
-                onClick={() => setAgentType("local")}
-                className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  agentType === "local"
-                    ? "bg-surface text-ink-800 shadow-sm"
-                    : "text-muted hover:text-ink-600"
-                }`}
-              >
-                Local
-              </button>
-              <button
-                type="button"
-                onClick={() => setAgentType("cloud")}
-                className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  agentType === "cloud"
-                    ? "bg-surface text-ink-800 shadow-sm"
-                    : "text-muted hover:text-ink-600"
-                }`}
-              >
-                Cloud
-              </button>
-            </div>
-            <span className="text-[11px] text-muted-light">
-              {agentType === "local"
-                ? "Tools run on your machine"
-                : "Tools run in a Daytona cloud sandbox"}
-            </span>
-          </div>
 
           {/* Icon Picker */}
           <div className="grid gap-1.5">

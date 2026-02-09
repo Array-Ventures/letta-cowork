@@ -18,6 +18,7 @@ type EventPayloadMapping = {
     "generate-session-title": string;
     "get-recent-cwds": string[];
     "select-directory": string | null;
+    "select-file": string | null;
 }
 
 interface Window {
@@ -31,5 +32,6 @@ interface Window {
         onServerEvent: (callback: (event: any) => void) => UnsubscribeFunction;
         getRecentCwds: (limit?: number) => Promise<string[]>;
         selectDirectory: () => Promise<string | null>;
+        selectFile: () => Promise<string | null>;
     }
 }

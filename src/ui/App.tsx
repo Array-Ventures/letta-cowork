@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerEvent } from "./types";
 import { useIPC } from "./hooks/useIPC";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "./store/useAppStore";
 import { Sidebar, AgentIcon } from "./components/Sidebar";
 import { ArtifactViewer } from "./components/ArtifactViewer";
@@ -10,6 +11,9 @@ import { CreateAppModal } from "./components/CreateAppModal";
 import { usePromptActions } from "./components/PromptInput";
 import { ChatPanel } from "./components/ChatPanel";
 import { HomePage } from "./components/HomePage";
+import { FilesView } from "./components/FilesView";
+import { OnboardingWizard } from "./components/OnboardingWizard";
+import { SettingsModal } from "./components/SettingsModal";
 
 function App() {
   const partialMessageRef = useRef("");
@@ -18,28 +22,36 @@ function App() {
   const [partialSessionId, setPartialSessionId] = useState<string | null>(null);
   const [showCreateAgentModal, setShowCreateAgentModal] = useState(false);
   const [showCreateAppModal, setShowCreateAppModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
 
-  const sessions = useAppStore((s) => s.sessions);
-  const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const artifactSessionId = useAppStore((s) => s.artifactSessionId);
-  const showStartModal = useAppStore((s) => s.showStartModal);
+  const {
+    configStatus, currentConfig, sessions, activeSessionId,
+    artifactSessionId, showStartModal, globalError, historyRequested,
+    prompt, cwd, pendingStart, agents, models, selectedAgentId,
+    sessionsLoaded, agentsLoaded, activeView, sessionMode,
+  } = useAppStore(useShallow((s) => ({
+    configStatus: s.configStatus, currentConfig: s.currentConfig,
+    sessions: s.sessions, activeSessionId: s.activeSessionId,
+    artifactSessionId: s.artifactSessionId, showStartModal: s.showStartModal,
+    globalError: s.globalError, historyRequested: s.historyRequested,
+    prompt: s.prompt, cwd: s.cwd, pendingStart: s.pendingStart,
+    agents: s.agents, models: s.models, selectedAgentId: s.selectedAgentId,
+    sessionsLoaded: s.sessionsLoaded, agentsLoaded: s.agentsLoaded,
+    activeView: s.activeView, sessionMode: s.sessionMode,
+  })));
+
+  const [sessionDropdownOpen, setSessionDropdownOpen] = useState(false);
+
+  // Actions (stable refs — individual selectors are fine)
   const setShowStartModal = useAppStore((s) => s.setShowStartModal);
-  const globalError = useAppStore((s) => s.globalError);
   const setGlobalError = useAppStore((s) => s.setGlobalError);
-  const historyRequested = useAppStore((s) => s.historyRequested);
   const markHistoryRequested = useAppStore((s) => s.markHistoryRequested);
   const handleServerEvent = useAppStore((s) => s.handleServerEvent);
-  const prompt = useAppStore((s) => s.prompt);
   const setPrompt = useAppStore((s) => s.setPrompt);
-  const cwd = useAppStore((s) => s.cwd);
   const setCwd = useAppStore((s) => s.setCwd);
-  const pendingStart = useAppStore((s) => s.pendingStart);
-  const agents = useAppStore((s) => s.agents);
-  const models = useAppStore((s) => s.models);
-  const sessionsLoaded = useAppStore((s) => s.sessionsLoaded);
-  const agentsLoaded = useAppStore((s) => s.agentsLoaded);
-  const activeView = useAppStore((s) => s.activeView);
+  const setSessionMode = useAppStore((s) => s.setSessionMode);
+  const setActiveSessionId = useAppStore((s) => s.setActiveSessionId);
 
   // Handle partial messages from stream events (session-aware)
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -82,16 +94,31 @@ function App() {
   const { handleStartFromModal } = usePromptActions(sendEvent);
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
-  const activeAgent = agents.find((a) => a.lettaAgentId === activeSession?.agentId);
+  const selectedAgent = agents.find((a) => a.lettaAgentId === selectedAgentId);
 
-  // Fetch initial data on connect
+  // Sessions for the selected agent, newest first
+  const agentSessions = useMemo(() => {
+    if (!selectedAgentId) return [];
+    return Object.values(sessions)
+      .filter((s) => s.agentId === selectedAgentId)
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }, [sessions, selectedAgentId]);
+
+  // On connect: check config status first
   useEffect(() => {
     if (connected) {
+      sendEvent({ type: "config.get" });
+    }
+  }, [connected, sendEvent]);
+
+  // Fetch app data only after config is confirmed
+  useEffect(() => {
+    if (connected && configStatus === "configured") {
       sendEvent({ type: "session.list" });
       sendEvent({ type: "agent.list" });
       sendEvent({ type: "artifacts.list" });
     }
-  }, [connected, sendEvent]);
+  }, [connected, configStatus, sendEvent]);
 
   // First launch: no agents and no sessions → prompt user to create an agent
   useEffect(() => {
@@ -135,13 +162,9 @@ function App() {
     sendEvent({ type: "models.list" });
   }, [sendEvent]);
 
-  const handleCreateAgent = useCallback((name: string, icon: string, color: string, model?: string, agentType?: "local" | "cloud") => {
-    sendEvent({ type: "agent.create", payload: { name, icon, color, model, agentType } });
+  const handleCreateAgent = useCallback((name: string, icon: string, color: string, model?: string) => {
+    sendEvent({ type: "agent.create", payload: { name, icon, color, model } });
     setShowCreateAgentModal(false);
-  }, [sendEvent]);
-
-  const handleDeleteSession = useCallback((sessionId: string) => {
-    sendEvent({ type: "session.delete", payload: { sessionId } });
   }, [sendEvent]);
 
   const openCreateAppModal = useCallback(() => {
@@ -155,18 +178,36 @@ function App() {
     setShowCreateAppModal(false);
   }, [sendEvent]);
 
+  // Loading state while checking config
+  if (configStatus === "loading") {
+    return (
+      <div className="flex h-screen items-center justify-center bg-surface">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-accent" />
+          <span className="text-sm text-muted">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Onboarding wizard when not configured
+  if (configStatus === "unconfigured") {
+    return <OnboardingWizard sendEvent={sendEvent} />;
+  }
+
   return (
     <div className="flex h-screen bg-surface">
       <Sidebar
         connected={connected}
-        onNewSession={handleNewSession}
         onNewAgent={openCreateAgentModal}
         onNewApp={openCreateAppModal}
-        onDeleteSession={handleDeleteSession}
+        onSettings={() => setShowSettingsModal(true)}
       />
 
       {activeView.type === "home" ? (
         <HomePage />
+      ) : activeView.type === "files" ? (
+        <FilesView sendEvent={sendEvent} />
       ) : activeView.type === "artifact" ? (
         <ArtifactViewer
           artifactId={activeView.artifactId}
@@ -177,21 +218,77 @@ function App() {
       ) : (
       <main className="flex flex-1 flex-col ml-[280px] bg-surface-cream">
         <div
-          className="flex items-center justify-center gap-3 h-12 border-b border-ink-900/10 bg-surface-cream select-none"
+          className="relative flex items-center gap-3 h-12 border-b border-ink-900/10 bg-surface-cream select-none px-4"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
-          {activeAgent && (
-            <span className="flex items-center gap-1.5 rounded-full bg-accent-subtle px-2.5 py-1">
+          {selectedAgent && (
+            <span className="flex items-center gap-1.5 rounded-full bg-accent-subtle px-2.5 py-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
               <span
                 className="flex h-5 w-5 items-center justify-center rounded-full"
-                style={{ backgroundColor: activeAgent.color }}
+                style={{ backgroundColor: selectedAgent.color }}
               >
-                <AgentIcon name={activeAgent.icon} className="h-3 w-3 text-white" />
+                <AgentIcon name={selectedAgent.icon} className="h-3 w-3 text-white" />
               </span>
-              <span className="text-xs font-semibold text-accent">{activeAgent.name}</span>
+              <span className="text-xs font-semibold text-accent">{selectedAgent.name}</span>
             </span>
           )}
-          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "Letta Cowork"}</span>
+          <button
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-ink-900/5 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={() => setSessionDropdownOpen(!sessionDropdownOpen)}
+          >
+            <span className="text-sm font-medium text-ink-700">
+              {activeSession?.title || "No session"}
+            </span>
+            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-muted transition-transform ${sessionDropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+
+          {/* Session Dropdown */}
+          {sessionDropdownOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setSessionDropdownOpen(false)} />
+              <div className="absolute left-4 top-full z-50 mt-1 w-72 rounded-xl border border-ink-900/10 bg-surface shadow-lg" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                <div className="px-3 pt-3 pb-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[1.5px] text-muted-light">Sessions</span>
+                </div>
+                <div className="max-h-56 overflow-y-auto px-1 pb-1">
+                  {agentSessions.length === 0 && (
+                    <div className="px-3 py-4 text-center text-xs text-muted">No sessions yet</div>
+                  )}
+                  {agentSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
+                        s.id === activeSessionId ? "bg-accent-subtle" : "hover:bg-surface-tertiary"
+                      }`}
+                      onClick={() => { setActiveSessionId(s.id); setSessionDropdownOpen(false); }}
+                    >
+                      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 ${s.id === activeSessionId ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                      <span className={`flex-1 truncate text-xs ${s.id === activeSessionId ? "font-medium text-accent" : "text-ink-700"}`}>
+                        {s.title || "Untitled"}
+                      </span>
+                      <span className="text-[10px] text-muted flex-shrink-0">{timeAgo(s.updatedAt)}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-ink-900/10 p-1">
+                  <button
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-accent hover:bg-accent-subtle transition-colors"
+                    onClick={() => { handleNewSession(); setSessionDropdownOpen(false); }}
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    New Session
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <ChatPanel
@@ -226,14 +323,20 @@ function App() {
           cwd={cwd}
           prompt={prompt}
           pendingStart={pendingStart}
-          agentType={(() => {
-            const selectedAgentId = useAppStore.getState().selectedAgentId;
-            return agents.find((a) => a.lettaAgentId === selectedAgentId)?.type;
-          })()}
+          mode={sessionMode}
+          onModeChange={setSessionMode}
           onCwdChange={setCwd}
           onPromptChange={setPrompt}
           onStart={handleStartFromModal}
           onClose={() => setShowStartModal(false)}
+        />
+      )}
+
+      {showSettingsModal && currentConfig && (
+        <SettingsModal
+          config={currentConfig}
+          sendEvent={sendEvent}
+          onClose={() => setShowSettingsModal(false)}
         />
       )}
 
@@ -249,6 +352,18 @@ function App() {
       )}
     </div>
   );
+}
+
+function timeAgo(ts?: number): string {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 export default App;

@@ -5,11 +5,17 @@ import { join } from "path";
 import { pathToFileURL } from "url";
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { createLogger } from "./libs/logger.js";
+import { getRecentCwds, addRecentCwd } from "./libs/recent-cwds.js";
 
 const log = createLogger("main");
 
 // Load .env file from project root
 dotenvConfig({ path: join(process.cwd(), ".env") });
+
+// Load saved config (overrides .env values when present)
+import { loadConfig, applyConfigToEnv } from "./libs/config-store.js";
+const savedConfig = loadConfig();
+if (savedConfig) applyConfigToEnv(savedConfig);
 
 // Default to Letta Cloud if no base URL set
 if (!process.env.LETTA_BASE_URL) {
@@ -143,12 +149,12 @@ app.on("ready", () => {
         handleClientEvent(event);
     });
 
-    // Handle recent cwds request (simplified - no local storage)
+    // Handle recent cwds request (persisted to ~/.letta-cowork/recent-cwds.json)
     ipcMainHandle("get-recent-cwds", () => {
-        return [process.cwd()]; // Just return current directory
+        return getRecentCwds();
     });
 
-    // Handle directory selection
+    // Handle directory selection — also records to recent list
     ipcMainHandle("select-directory", async () => {
         const result = await dialog.showOpenDialog(mainWindow!, {
             properties: ['openDirectory']
@@ -158,6 +164,21 @@ app.on("ready", () => {
             return null;
         }
 
+        const selected = result.filePaths[0];
+        addRecentCwd(selected);
+        return selected;
+    });
+
+    // Handle file selection for upload
+    ipcMainHandle("select-file", async () => {
+        const result = await dialog.showOpenDialog(mainWindow!, {
+            properties: ['openFile'],
+            filters: [
+                { name: 'Supported Files', extensions: ['pdf', 'txt', 'md', 'json'] },
+                { name: 'All Files', extensions: ['*'] },
+            ]
+        });
+        if (result.canceled) return null;
         return result.filePaths[0];
     });
 })

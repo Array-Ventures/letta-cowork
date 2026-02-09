@@ -10,6 +10,11 @@ const log = createLogger("daytona");
 
 let client: Daytona | null = null;
 
+export function resetDaytonaClient(): void {
+  client = null;
+  log.info("Reset Daytona client singleton");
+}
+
 export function getDaytonaClient(): Daytona {
   if (!client) {
     const apiKey = process.env.DAYTONA_API_KEY;

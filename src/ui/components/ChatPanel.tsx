@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientEvent, CanUseToolResponse, ApprovalRequestMessage } from "../types";
 import { useMessageWindow } from "../hooks/useMessageWindow";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/useAppStore";
 import { PromptInput } from "./PromptInput";
 import { MessageCard } from "./EventCard";
@@ -39,8 +40,7 @@ export function ChatPanel({
   const scrollHeightBeforeLoadRef = useRef(0);
   const shouldRestoreScrollRef = useRef(false);
 
-  const sessions = useAppStore((s) => s.sessions);
-  const agents = useAppStore((s) => s.agents);
+  const { sessions, agents } = useAppStore(useShallow((s) => ({ sessions: s.sessions, agents: s.agents })));
   const resolvePermissionRequest = useAppStore((s) => s.resolvePermissionRequest);
   const markApprovalHandled = useAppStore((s) => s.markApprovalHandled);
 

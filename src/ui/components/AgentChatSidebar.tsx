@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ClientEvent } from "../types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/useAppStore";
 import { AgentIcon } from "./Sidebar";
 import { ChatPanel } from "./ChatPanel";
@@ -25,9 +26,10 @@ export function AgentChatSidebar({
   partialMessage = "",
   showPartialMessage = false,
 }: AgentChatSidebarProps) {
-  const artifactSessionId = useAppStore((s) => s.artifactSessionId);
+  const { artifactSessionId, sessions } = useAppStore(
+    useShallow((s) => ({ artifactSessionId: s.artifactSessionId, sessions: s.sessions }))
+  );
   const setArtifactSessionId = useAppStore((s) => s.setArtifactSessionId);
-  const sessions = useAppStore((s) => s.sessions);
   const session = artifactSessionId ? sessions[artifactSessionId] : undefined;
   const isRunning = session?.status === "running";
 

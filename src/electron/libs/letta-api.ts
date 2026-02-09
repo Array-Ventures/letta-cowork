@@ -55,9 +55,14 @@ export async function fetchMessagePage(
   return { items: page.items, hasMore };
 }
 
-export async function updateAgent(agentId: string, updates: { name?: string; description?: string }): Promise<void> {
+export async function updateAgent(agentId: string, updates: { name?: string; description?: string; metadata?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<void> {
   const client = getLettaClient();
   await client.agents.update(agentId, updates);
+}
+
+export async function deleteAgentOnServer(agentId: string): Promise<void> {
+  const client = getLettaClient();
+  await client.agents.delete(agentId);
 }
 
 export async function sendApprovalResponse(

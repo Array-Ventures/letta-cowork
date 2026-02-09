@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/useAppStore";
 import { AgentIcon } from "./Sidebar";
 
@@ -45,9 +46,9 @@ function AgentCard({ name, icon, color, sessionCount, status }: {
 }
 
 export function HomePage() {
-  const agents = useAppStore((s) => s.agents);
-  const sessions = useAppStore((s) => s.sessions);
-  const artifacts = useAppStore((s) => s.artifacts);
+  const { agents, sessions, artifacts } = useAppStore(
+    useShallow((s) => ({ agents: s.agents, sessions: s.sessions, artifacts: s.artifacts }))
+  );
 
   const sessionList = Object.values(sessions);
   const activeAgentCount = agents.length;

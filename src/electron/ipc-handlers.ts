@@ -18,18 +18,37 @@ import {
   fetchLastRun,
   transformLettaMessages,
   updateAgent,
+  deleteAgentOnServer,
   sendApprovalResponse,
   type Run,
   type Conversation,
 } from "./libs/letta-api.js";
 import { getLettaClient } from "./libs/letta-client.js";
 import {
-  loadAgents,
-  deleteAgent as deleteAgentFromStore,
-  renameAgent as renameAgentInStore,
-  createAndSaveAgent,
+  fetchAgents,
+  createNewAgent,
+  ensureCloudReady,
 } from "./libs/agent-store.js";
 import { listArtifacts, ensureArtifactAgents, createArtifact, getArtifactBundlePath } from "./libs/artifact-store.js";
+import {
+  listFolders,
+  createFolder,
+  updateFolder,
+  deleteFolder,
+  listFiles,
+  uploadFile,
+  deleteFile,
+  listFolderAgents,
+  attachFolderToAgent,
+  detachFolderFromAgent,
+  listEmbeddingModels,
+} from "./libs/letta-folders.js";
+import { addRecentCwd } from "./libs/recent-cwds.js";
+import { loadConfig, saveConfig, deleteConfig, applyConfigToEnv, redactConfig } from "./libs/config-store.js";
+import { resetLettaClient } from "./libs/letta-client.js";
+import { resetDaytonaClient } from "./libs/daytona.js";
+import { Letta } from "@letta-ai/letta-client";
+import { Daytona } from "@daytonaio/sdk";
 import { watch, type FSWatcher } from "node:fs";
 import { dirname, basename } from "node:path";
 
@@ -98,6 +117,134 @@ function emit(event: ServerEvent) {
 }
 
 export async function handleClientEvent(event: ClientEvent) {
+  // --- Config / Onboarding ---
+
+  if (event.type === "config.get") {
+    const config = loadConfig();
+    log.debug("config.get", { configured: !!config });
+    if (config) {
+      emit({ type: "config.status", payload: { configured: true, config: redactConfig(config) } });
+    } else {
+      emit({ type: "config.status", payload: { configured: false } });
+    }
+    return;
+  }
+
+  if (event.type === "config.testServer") {
+    const { baseUrl, apiKey } = event.payload;
+    log.info("config.testServer", { baseUrl, hasApiKey: !!apiKey });
+    try {
+      const tempClient = new Letta({ baseURL: baseUrl, ...(apiKey ? { apiKey } : {}) });
+      const health = await tempClient.health();
+      log.info("config.testServer success", { version: health.version });
+      emit({ type: "config.testServer.result", payload: { success: true, version: health.version } });
+    } catch (error) {
+      log.error("config.testServer failed:", error);
+      emit({ type: "config.testServer.result", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.listOrgs") {
+    const { baseUrl, apiKey } = event.payload;
+    log.debug("config.listOrgs", { baseUrl });
+    try {
+      // Organizations are identities with identity_type=org in Letta
+      const resp = await fetch(`${baseUrl}/v1/identities/?identity_type=org&limit=100`, {
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const orgs = (await resp.json()) as Array<{ id: string; name: string }>;
+      log.info("config.listOrgs", { count: orgs.length, names: orgs.map((o) => o.name) });
+      emit({ type: "config.listOrgs.result", payload: { success: true, orgs: orgs.map((o) => ({ id: o.id, name: o.name })) } });
+    } catch (error) {
+      log.error("config.listOrgs failed:", error);
+      emit({ type: "config.listOrgs.result", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.listIdentities") {
+    const { baseUrl, apiKey } = event.payload;
+    log.debug("config.listIdentities", { baseUrl });
+    try {
+      const resp = await fetch(`${baseUrl}/v1/identities/?identity_type=user&limit=100`, {
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const identities = (await resp.json()) as Array<{ id: string; name: string; identifier_key: string }>;
+      log.info("config.listIdentities", { count: identities.length, names: identities.map((i) => i.name) });
+      emit({
+        type: "config.listIdentities.result",
+        payload: { success: true, identities: identities.map((i) => ({ id: i.id, name: i.name, identifierKey: i.identifier_key })) },
+      });
+    } catch (error) {
+      log.error("config.listIdentities failed:", error);
+      emit({ type: "config.listIdentities.result", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.createIdentity") {
+    const { baseUrl, apiKey, name, identifierKey } = event.payload;
+    log.info("config.createIdentity", { name, identifierKey });
+    try {
+      const resp = await fetch(`${baseUrl}/v1/identities/`, {
+        method: "PUT",
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
+        body: JSON.stringify({ name, identifier_key: identifierKey, identity_type: "user" }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const identity = (await resp.json()) as { id: string };
+      log.info("config.createIdentity success", { identityId: identity.id });
+      emit({ type: "config.createIdentity.result", payload: { success: true, identityId: identity.id } });
+    } catch (error) {
+      log.error("config.createIdentity failed:", error);
+      emit({ type: "config.createIdentity.result", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.testDaytona") {
+    const { apiKey, apiUrl } = event.payload;
+    log.info("config.testDaytona", { apiUrl, hasApiKey: !!apiKey });
+    try {
+      const tempClient = new Daytona({ apiKey, ...(apiUrl ? { apiUrl } : {}) });
+      await tempClient.list();
+      log.info("config.testDaytona success");
+      emit({ type: "config.testDaytona.result", payload: { success: true } });
+    } catch (error) {
+      log.error("config.testDaytona failed:", error);
+      emit({ type: "config.testDaytona.result", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.save") {
+    log.info("config.save");
+    try {
+      saveConfig(event.payload);
+      applyConfigToEnv(event.payload);
+      resetLettaClient();
+      resetDaytonaClient();
+      log.info("config.save success");
+      emit({ type: "config.saved", payload: { success: true } });
+    } catch (error) {
+      log.error("config.save failed:", error);
+      emit({ type: "config.saved", payload: { success: false, error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "config.reset") {
+    log.info("config.reset");
+    deleteConfig();
+    resetLettaClient();
+    resetDaytonaClient();
+    emit({ type: "config.reset.result", payload: { success: true } });
+    return;
+  }
+
   // Model listing
   if (event.type === "models.list") {
     try {
@@ -126,8 +273,12 @@ export async function handleClientEvent(event: ClientEvent) {
     const artifacts = listArtifacts();
     emit({ type: "artifacts.list", payload: { artifacts } });
     // Refresh agent list since new agents may have been created
-    const agents = loadAgents();
-    emit({ type: "agent.list", payload: { agents } });
+    try {
+      const agents = await fetchAgents();
+      emit({ type: "agent.list", payload: { agents } });
+    } catch (error) {
+      log.error("Failed to refresh agents after artifact list:", error);
+    }
     return;
   }
 
@@ -137,7 +288,8 @@ export async function handleClientEvent(event: ClientEvent) {
       emit({ type: "artifact.created", payload: { artifact } });
       // Refresh both lists
       emit({ type: "artifacts.list", payload: { artifacts: listArtifacts() } });
-      emit({ type: "agent.list", payload: { agents: loadAgents() } });
+      const agents = await fetchAgents();
+      emit({ type: "agent.list", payload: { agents } });
     } catch (error) {
       emit({ type: "runner.error", payload: { message: `Failed to create app: ${error}` } });
     }
@@ -170,21 +322,25 @@ export async function handleClientEvent(event: ClientEvent) {
 
   // Agent management
   if (event.type === "agent.list") {
-    const agents = loadAgents();
-    emit({ type: "agent.list", payload: { agents } });
+    try {
+      const agents = await fetchAgents();
+      emit({ type: "agent.list", payload: { agents } });
+    } catch (error) {
+      log.error("Failed to list agents:", error);
+      emit({ type: "agent.list", payload: { agents: [] } });
+    }
     return;
   }
 
   if (event.type === "agent.create") {
     try {
-      const entry = await createAndSaveAgent({
+      const agent = await createNewAgent({
         name: event.payload.name,
         icon: event.payload.icon,
         color: event.payload.color,
         model: event.payload.model,
-        type: event.payload.agentType,
       });
-      emit({ type: "agent.created", payload: entry });
+      emit({ type: "agent.created", payload: agent });
     } catch (error) {
       log.error("Failed to create agent:", error);
       emit({ type: "runner.error", payload: { message: `Failed to create agent: ${error}` } });
@@ -193,23 +349,30 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "agent.delete") {
-    deleteAgentFromStore(event.payload.lettaAgentId);
-    emit({ type: "agent.deleted", payload: { lettaAgentId: event.payload.lettaAgentId } });
+    try {
+      await deleteAgentOnServer(event.payload.lettaAgentId);
+      emit({ type: "agent.deleted", payload: { lettaAgentId: event.payload.lettaAgentId } });
+    } catch (error) {
+      log.error("Failed to delete agent:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to delete agent: ${error}` } });
+    }
     return;
   }
 
   if (event.type === "agent.rename") {
-    renameAgentInStore(event.payload.lettaAgentId, event.payload.name);
-    await updateAgent(event.payload.lettaAgentId, { name: event.payload.name }).catch((err) =>
-      log.warn("Failed to sync agent rename to server:", err)
-    );
-    emit({ type: "agent.renamed", payload: { lettaAgentId: event.payload.lettaAgentId, name: event.payload.name } });
+    try {
+      await updateAgent(event.payload.lettaAgentId, { name: event.payload.name });
+      emit({ type: "agent.renamed", payload: { lettaAgentId: event.payload.lettaAgentId, name: event.payload.name } });
+    } catch (error) {
+      log.error("Failed to rename agent:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to rename agent: ${error}` } });
+    }
     return;
   }
 
   if (event.type === "session.list") {
     try {
-      const agents = loadAgents();
+      const agents = await fetchAgents();
       const runtimeSessions = getAllSessions();
 
       const results = await Promise.allSettled(
@@ -298,14 +461,17 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.start") {
-    log.debug("session.start", { agentId: event.payload.agentId, promptLength: event.payload.prompt.length });
-
-    // Determine if this is a cloud agent
-    const agents = loadAgents();
-    const agent = agents.find((a) => a.lettaAgentId === event.payload.agentId);
-    const isCloud = agent?.type === "cloud";
+    const mode = event.payload.mode ?? "cloud";
+    const isCloud = mode === "cloud";
+    log.debug("session.start", { agentId: event.payload.agentId, mode, isCloud, promptLength: event.payload.prompt.length });
+    if (event.payload.cwd) addRecentCwd(event.payload.cwd);
 
     try {
+      // For cloud mode, ensure the agent has a sandbox (legacy fallback)
+      if (isCloud && event.payload.agentId) {
+        await ensureCloudReady(event.payload.agentId);
+      }
+
       let conversationId: string | null = null;
       let handle: RunnerHandle | null = null;
 
@@ -314,7 +480,7 @@ export async function handleClientEvent(event: ClientEvent) {
           conversationId = updates.lettaConversationId;
 
           createRuntimeSession(conversationId);
-          updateSession(conversationId, { status: "running", agentId: event.payload.agentId, agentType: isCloud ? "cloud" : "local" });
+          updateSession(conversationId, { status: "running", agentId: event.payload.agentId, mode });
           if (handle) runnerHandles.set(conversationId, handle);
 
           emit({
@@ -366,7 +532,6 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.continue") {
-    log.debug("session.continue", { conversationId: event.payload.sessionId });
     const conversationId = event.payload.sessionId;
     let runtimeSession = getSession(conversationId);
 
@@ -374,14 +539,13 @@ export async function handleClientEvent(event: ClientEvent) {
       runtimeSession = createRuntimeSession(conversationId);
     }
 
-    // Determine if this is a cloud agent from runtime state or agent store
-    const isCloud = runtimeSession.agentType === "cloud" || (() => {
-      if (!runtimeSession.agentId) return false;
-      const agents = loadAgents();
-      return agents.find((a) => a.lettaAgentId === runtimeSession.agentId)?.type === "cloud";
-    })();
+    // Per-message mode: prefer payload mode, fall back to runtime state, default cloud
+    const mode = event.payload.mode ?? runtimeSession.mode ?? "cloud";
+    const isCloud = mode === "cloud";
+    log.debug("session.continue", { conversationId, payloadMode: event.payload.mode, runtimeMode: runtimeSession.mode, resolvedMode: mode, isCloud });
+    if (event.payload.cwd) addRecentCwd(event.payload.cwd);
 
-    updateSession(conversationId, { status: "running" });
+    updateSession(conversationId, { status: "running", mode });
     emit({
       type: "session.status",
       payload: { sessionId: conversationId, status: "running" },
@@ -393,6 +557,11 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     try {
+      // Ensure cloud infra exists when switching to cloud mid-session
+      if (isCloud && runtimeSession.agentId) {
+        await ensureCloudReady(runtimeSession.agentId);
+      }
+
       const runnerOptions = {
         prompt: event.payload.prompt,
         session: {
@@ -407,6 +576,7 @@ export async function handleClientEvent(event: ClientEvent) {
         onComplete: (convId: string) => emitSessionRefresh(convId),
       };
 
+      log.debug("session.continue runner", { conversationId, isCloud: isCloud ? "cloud-runner" : "local-runner" });
       const handle = isCloud
         ? await runCloudAgent(runnerOptions)
         : await runLetta(runnerOptions);
@@ -471,6 +641,137 @@ export async function handleClientEvent(event: ClientEvent) {
         type: "session.status",
         payload: { sessionId, status: "error", error: String(error) },
       });
+    }
+    return;
+  }
+
+  // --- Folder / File management ---
+
+  if (event.type === "folder.list") {
+    try {
+      const folders = await listFolders();
+      emit({ type: "folder.list", payload: { folders } });
+    } catch (error) {
+      log.error("Failed to list folders:", error);
+      emit({ type: "folder.list", payload: { folders: [] } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.create") {
+    try {
+      const folder = await createFolder(event.payload.name, {
+        description: event.payload.description,
+        instructions: event.payload.instructions,
+        embedding: event.payload.embedding,
+      });
+      emit({ type: "folder.created", payload: folder });
+    } catch (error) {
+      log.error("Failed to create folder:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to create folder: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.update") {
+    try {
+      const folder = await updateFolder(event.payload.folderId, {
+        name: event.payload.name,
+        description: event.payload.description,
+        instructions: event.payload.instructions,
+      });
+      emit({ type: "folder.updated", payload: folder });
+    } catch (error) {
+      log.error("Failed to update folder:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to update folder: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.delete") {
+    try {
+      await deleteFolder(event.payload.folderId);
+      emit({ type: "folder.deleted", payload: { folderId: event.payload.folderId } });
+    } catch (error) {
+      log.error("Failed to delete folder:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to delete folder: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.files") {
+    try {
+      const files = await listFiles(event.payload.folderId);
+      emit({ type: "folder.files", payload: { folderId: event.payload.folderId, files } });
+    } catch (error) {
+      log.error("Failed to list files:", error);
+      emit({ type: "folder.files", payload: { folderId: event.payload.folderId, files: [] } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.upload") {
+    try {
+      const file = await uploadFile(event.payload.folderId, event.payload.filePath);
+      emit({ type: "folder.file.uploaded", payload: { folderId: event.payload.folderId, file } });
+    } catch (error) {
+      log.error("Failed to upload file:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to upload file: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.file.delete") {
+    try {
+      await deleteFile(event.payload.folderId, event.payload.fileId);
+      emit({ type: "folder.file.deleted", payload: { folderId: event.payload.folderId, fileId: event.payload.fileId } });
+    } catch (error) {
+      log.error("Failed to delete file:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to delete file: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.agents") {
+    try {
+      const agentIds = await listFolderAgents(event.payload.folderId);
+      emit({ type: "folder.agents", payload: { folderId: event.payload.folderId, agentIds } });
+    } catch (error) {
+      log.error("Failed to list folder agents:", error);
+      emit({ type: "folder.agents", payload: { folderId: event.payload.folderId, agentIds: [] } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.attach") {
+    try {
+      await attachFolderToAgent(event.payload.folderId, event.payload.agentId);
+      emit({ type: "folder.attached", payload: { folderId: event.payload.folderId, agentId: event.payload.agentId } });
+    } catch (error) {
+      log.error("Failed to attach folder:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to attach folder: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "folder.detach") {
+    try {
+      await detachFolderFromAgent(event.payload.folderId, event.payload.agentId);
+      emit({ type: "folder.detached", payload: { folderId: event.payload.folderId, agentId: event.payload.agentId } });
+    } catch (error) {
+      log.error("Failed to detach folder:", error);
+      emit({ type: "runner.error", payload: { message: `Failed to detach folder: ${error}` } });
+    }
+    return;
+  }
+
+  if (event.type === "embedding_models.list") {
+    try {
+      const models = await listEmbeddingModels();
+      emit({ type: "embedding_models.list", payload: { models } });
+    } catch (error) {
+      log.error("Failed to list embedding models:", error);
+      emit({ type: "embedding_models.list", payload: { models: [] } });
     }
     return;
   }

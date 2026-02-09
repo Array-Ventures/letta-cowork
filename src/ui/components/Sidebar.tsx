@@ -1,35 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import * as Dialog from "@radix-ui/react-dialog";
-import { useAppStore, type SessionView } from "../store/useAppStore";
-import type { AgentInfo, SessionStatus } from "../types";
+import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useAppStore } from "../store/useAppStore";
+import type { AgentInfo } from "../types";
 
 interface SidebarProps {
   connected: boolean;
-  onNewSession: () => void;
   onNewAgent: () => void;
   onNewApp: () => void;
-  onDeleteSession: (sessionId: string) => void;
+  onSettings?: () => void;
 }
 
 export function Sidebar({
-  onNewSession,
   onNewAgent,
   onNewApp,
-  onDeleteSession,
+  onSettings,
 }: SidebarProps) {
-  const sessions = useAppStore((state) => state.sessions);
-  const agents = useAppStore((state) => state.agents);
-  const selectedAgentId = useAppStore((state) => state.selectedAgentId);
-  const setSelectedAgent = useAppStore((state) => state.setSelectedAgent);
-  const activeSessionId = useAppStore((state) => state.activeSessionId);
-  const setActiveSessionId = useAppStore((state) => state.setActiveSessionId);
-  const activeView = useAppStore((state) => state.activeView);
-  const setActiveView = useAppStore((state) => state.setActiveView);
-  const artifacts = useAppStore((state) => state.artifacts);
-  const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const closeTimerRef = useRef<number | null>(null);
+  const { sessions, agents, selectedAgentId, activeView, artifacts, currentConfig } = useAppStore(
+    useShallow((s) => ({
+      sessions: s.sessions, agents: s.agents, selectedAgentId: s.selectedAgentId,
+      activeView: s.activeView, artifacts: s.artifacts, currentConfig: s.currentConfig,
+    }))
+  );
+  const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
+  const setActiveSessionId = useAppStore((s) => s.setActiveSessionId);
+  const setActiveView = useAppStore((s) => s.setActiveView);
 
   const sessionList = useMemo(() => {
     const list = Object.values(sessions);
@@ -44,47 +38,19 @@ export function Sidebar({
     }
   }, [agents, selectedAgentId, setSelectedAgent]);
 
-  useEffect(() => {
-    queueMicrotask(() => setCopied(false));
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
+  const handleAgentClick = (agentId: string) => {
+    setSelectedAgent(agentId);
+    // Auto-select the most recent session for this agent
+    const agentSessions = sessionList.filter((s) => s.agentId === agentId);
+    if (agentSessions.length > 0) {
+      setActiveSessionId(agentSessions[0].id);
+    } else {
+      setActiveView({ type: "chat" });
     }
-  }, [resumeSessionId]);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimerRef.current) {
-        window.clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleCopyCommand = async () => {
-    if (!resumeSessionId) return;
-    const command = `letta --conv ${resumeSessionId}`;
-    try {
-      await navigator.clipboard.writeText(command);
-    } catch {
-      return;
-    }
-    setCopied(true);
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current);
-    }
-    closeTimerRef.current = window.setTimeout(() => {
-      setResumeSessionId(null);
-    }, 3000);
   };
 
-  const sessionsForAgent = (agentId: string): SessionView[] =>
-    sessionList.filter((s) => s.agentId === agentId);
-
-  // Sessions with no agent assigned (legacy / fallback)
-  const unassignedSessions = sessionList.filter((s) => !s.agentId);
-
   const isHomeActive = activeView.type === "home";
+  const isFilesActive = activeView.type === "files";
 
   return (
     <aside className="fixed inset-y-0 left-0 flex h-full w-[280px] flex-col gap-4 border-r border-border bg-sidebar px-4 pb-4 pt-5">
@@ -93,12 +59,21 @@ export function Sidebar({
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       />
 
-      {/* Org Logo */}
-      <div className="flex items-center gap-2 pb-4 pt-7">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent">
-          <span className="text-sm font-bold text-white">L</span>
+      {/* Org & User */}
+      <div className="flex items-center gap-2.5 pb-4 pt-7">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent flex-shrink-0">
+          <span className="text-sm font-bold text-white">
+            {(currentConfig?.organization.name ?? "L")[0].toUpperCase()}
+          </span>
         </div>
-        <span className="text-[15px] font-semibold text-ink-900">Array Ventures</span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-[13px] font-semibold text-ink-900 truncate">
+            {currentConfig?.organization.name ?? "Letta Cowork"}
+          </span>
+          {currentConfig?.identity.name && (
+            <span className="text-[11px] text-muted truncate">{currentConfig.identity.name}</span>
+          )}
+        </div>
       </div>
 
       {/* Nav Links */}
@@ -116,13 +91,15 @@ export function Sidebar({
           Home
         </button>
         <button
-          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-ink-700 hover:bg-surface-tertiary transition-colors"
+          className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors ${
+            isFilesActive ? "bg-accent-subtle font-medium text-accent" : "text-ink-700 hover:bg-surface-tertiary"
+          }`}
+          onClick={() => setActiveView({ type: "files" })}
         >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${isFilesActive ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
           </svg>
-          Library
+          Files
         </button>
       </nav>
 
@@ -142,59 +119,24 @@ export function Sidebar({
 
       {/* Agent List */}
       <div className="flex flex-col gap-2 overflow-y-auto -mt-2">
-        {agents.length === 0 && unassignedSessions.length === 0 && (
+        {agents.length === 0 && (
           <div className="rounded-xl border border-ink-900/5 bg-surface px-4 py-5 text-center text-xs text-muted">
             No agents yet. Create one to get started.
           </div>
         )}
 
         {agents.filter((a) => !artifacts.some((art) => art.agentId === a.lettaAgentId)).map((agent) => {
-          const isSelected = selectedAgentId === agent.lettaAgentId;
-          const agentSessions = sessionsForAgent(agent.lettaAgentId);
-
-          return isSelected ? (
-            <ExpandedAgentCard
-              key={agent.lettaAgentId}
-              agent={agent}
-              sessions={agentSessions}
-              activeSessionId={activeSessionId}
-              onSessionClick={setActiveSessionId}
-              onNewSession={onNewSession}
-              onDeleteSession={onDeleteSession}
-              onResumeSession={setResumeSessionId}
-            />
-          ) : (
-            <CollapsedAgentCard
+          const agentSessions = sessionList.filter((s) => s.agentId === agent.lettaAgentId);
+          return (
+            <AgentCard
               key={agent.lettaAgentId}
               agent={agent}
               sessionCount={agentSessions.length}
-              onClick={() => setSelectedAgent(agent.lettaAgentId)}
+              isSelected={selectedAgentId === agent.lettaAgentId}
+              onClick={() => handleAgentClick(agent.lettaAgentId)}
             />
           );
         })}
-
-        {/* Legacy sessions without agents */}
-        {unassignedSessions.length > 0 && (
-          <div className="mt-2">
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-light">
-              Unassigned Sessions
-            </div>
-            {unassignedSessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                title={session.title}
-                isActive={activeSessionId === session.id}
-                status={session.status}
-                hasPendingApproval={session.hasPendingApproval || [...session.restMessages, ...session.streamMessages].some(
-                  (m) => m.type === "approval_request" && m.isPending
-                )}
-                onClick={() => setActiveSessionId(session.id)}
-                onDelete={() => onDeleteSession(session.id)}
-                onResume={() => setResumeSessionId(session.id)}
-              />
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Apps */}
@@ -234,126 +176,44 @@ export function Sidebar({
         })}
       </div>
 
-      {/* Resume Dialog */}
-      <Dialog.Root open={!!resumeSessionId} onOpenChange={(open) => !open && setResumeSessionId(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-ink-900/40 backdrop-blur-sm" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 w-full max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-surface p-6 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <Dialog.Title className="text-lg font-semibold text-ink-800">Resume</Dialog.Title>
-              <Dialog.Close asChild>
-                <button className="rounded-full p-1 text-ink-500 hover:bg-ink-900/10" aria-label="Close dialog">
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M6 6l12 12M18 6l-12 12" />
-                  </svg>
-                </button>
-              </Dialog.Close>
-            </div>
-            <div className="mt-4 flex items-center gap-2 rounded-xl border border-ink-900/10 bg-surface px-3 py-2 font-mono text-xs text-ink-700">
-              <span className="flex-1 break-all">{resumeSessionId ? `letta --conv ${resumeSessionId}` : ""}</span>
-              <button className="rounded-lg p-1.5 text-ink-600 hover:bg-ink-900/10" onClick={handleCopyCommand} aria-label="Copy resume command">
-                {copied ? (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12l4 4L19 6" /></svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
-                )}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* Settings */}
+      <div className="mt-auto pt-2 border-t border-border">
+        <button
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-ink-700 hover:bg-surface-tertiary transition-colors"
+          onClick={onSettings}
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          Settings
+        </button>
+      </div>
+
     </aside>
   );
 }
 
 // --- Sub-components ---
 
-function ExpandedAgentCard({
-  agent,
-  sessions,
-  activeSessionId,
-  onSessionClick,
-  onNewSession,
-  onDeleteSession,
-  onResumeSession,
-}: {
-  agent: AgentInfo;
-  sessions: SessionView[];
-  activeSessionId: string | null;
-  onSessionClick: (id: string) => void;
-  onNewSession: () => void;
-  onDeleteSession: (id: string) => void;
-  onResumeSession: (id: string) => void;
-}) {
-  return (
-    <div className="rounded-xl border border-accent/40 bg-surface overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-2.5 bg-accent-subtle px-3 py-2.5">
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-full"
-          style={{ backgroundColor: agent.color }}
-        >
-          <AgentIcon name={agent.icon} className="h-4 w-4 text-white" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[13px] font-semibold text-accent truncate">{agent.name}</span>
-            {agent.type === "cloud" && (
-              <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">Cloud</span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-success">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-            Active
-          </div>
-        </div>
-        <svg viewBox="0 0 24 24" className="h-4 w-4 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M6 9L12 15L18 9" />
-        </svg>
-      </div>
-
-      {/* Sessions */}
-      <div className="flex flex-col gap-1 p-2">
-        {sessions.map((session) => (
-          <SessionItem
-            key={session.id}
-            title={session.title}
-            isActive={activeSessionId === session.id}
-            status={session.status}
-            hasPendingApproval={session.hasPendingApproval || [...session.restMessages, ...session.streamMessages].some(
-              (m) => m.type === "approval_request" && m.isPending
-            )}
-            onClick={() => onSessionClick(session.id)}
-            onDelete={() => onDeleteSession(session.id)}
-            onResume={() => onResumeSession(session.id)}
-          />
-        ))}
-        <button
-          className="flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-surface-tertiary transition-colors"
-          onClick={onNewSession}
-        >
-          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 5V19M5 12H19" />
-          </svg>
-          New Session
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function CollapsedAgentCard({
+function AgentCard({
   agent,
   sessionCount,
+  isSelected,
   onClick,
 }: {
   agent: AgentInfo;
   sessionCount: number;
+  isSelected: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      className="flex items-center gap-2.5 rounded-xl border border-ink-900/10 bg-surface px-3 py-2.5 text-left hover:bg-surface-tertiary transition-colors"
+      className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+        isSelected
+          ? "border-accent/40 bg-accent-subtle"
+          : "border-ink-900/10 bg-surface hover:bg-surface-tertiary"
+      }`}
       onClick={onClick}
     >
       <div
@@ -364,106 +224,16 @@ function CollapsedAgentCard({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-[13px] font-semibold text-ink-800 truncate">{agent.name}</span>
-          {agent.type === "cloud" && (
-            <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">Cloud</span>
-          )}
+          <span className={`text-[13px] font-semibold truncate ${isSelected ? "text-accent" : "text-ink-800"}`}>
+            {agent.name}
+          </span>
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted" />
+        <div className={`flex items-center gap-1.5 text-[11px] ${isSelected ? "text-accent/70" : "text-muted"}`}>
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${isSelected ? "bg-success" : "bg-muted"}`} />
           {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
         </div>
       </div>
-      <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M9 6L15 12L9 18" />
-      </svg>
     </button>
-  );
-}
-
-function SessionStatusDot({ status, hasPendingApproval }: { status: SessionStatus; hasPendingApproval: boolean }) {
-  if (hasPendingApproval) {
-    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 flex-shrink-0" />;
-  }
-  if (status === "running") {
-    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-success flex-shrink-0" />;
-  }
-  if (status === "error") {
-    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-error flex-shrink-0" />;
-  }
-  if (status === "completed") {
-    return <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted flex-shrink-0" />;
-  }
-  return null;
-}
-
-function SessionItem({
-  title,
-  isActive,
-  status = "idle",
-  hasPendingApproval = false,
-  onClick,
-  onDelete,
-  onResume,
-}: {
-  title: string;
-  isActive: boolean;
-  status?: SessionStatus;
-  hasPendingApproval?: boolean;
-  onClick: () => void;
-  onDelete: () => void;
-  onResume: () => void;
-}) {
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-colors ${
-        isActive ? "bg-accent-subtle" : "hover:bg-surface-tertiary"
-      }`}
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
-    >
-      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 ${isActive ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-      <span className={`flex-1 truncate text-xs ${isActive ? "font-medium text-ink-800" : "text-ink-700"}`}>
-        {title || "Untitled"}
-      </span>
-      <SessionStatusDot status={status} hasPendingApproval={hasPendingApproval} />
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild>
-          <button
-            className="flex-shrink-0 rounded-full p-1 text-ink-500 opacity-0 group-hover:opacity-100 hover:bg-ink-900/10"
-            aria-label="Session menu"
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
-              <circle cx="5" cy="12" r="1.7" />
-              <circle cx="12" cy="12" r="1.7" />
-              <circle cx="19" cy="12" r="1.7" />
-            </svg>
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content className="z-50 min-w-[180px] rounded-xl border border-ink-900/10 bg-surface p-1 shadow-lg" align="center" sideOffset={8}>
-            <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={onDelete}>
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-error/80" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" />
-              </svg>
-              Delete
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={onResume}>
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M4 5h16v14H4z" /><path d="M7 9h10M7 12h6" /><path d="M13 15l3 2-3 2" />
-              </svg>
-              Resume in CLI
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </div>
   );
 }
 

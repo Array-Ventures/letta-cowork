@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDev } from "../util.js";
-import { loadAgents, createAndSaveAgent } from "./agent-store.js";
+import { fetchAgents, createNewAgent } from "./agent-store.js";
 import type { ArtifactInfo } from "../types.js";
 import { createLogger } from "./logger.js";
 
@@ -100,8 +100,8 @@ export async function ensureArtifactAgents(): Promise<void> {
 
       const agentName = `${manifest.name} maintainer`;
 
-      // Check if agent already exists in agent-store (e.g. from a previous partial run)
-      const existingAgents = loadAgents();
+      // Check if agent already exists on server (e.g. from a previous partial run)
+      const existingAgents = await fetchAgents();
       const existing = existingAgents.find((a) => a.name === agentName);
       if (existing) {
         // Link existing agent to manifest
@@ -114,7 +114,7 @@ export async function ensureArtifactAgents(): Promise<void> {
       // Use first existing agent's model as fallback, or manifest agent.model
       const model = manifest.agent.model ?? existingAgents[0]?.model;
 
-      const agentEntry = await createAndSaveAgent({
+      const agentEntry = await createNewAgent({
         name: agentName,
         icon: manifest.agent.icon,
         color: manifest.agent.color,
@@ -218,7 +218,7 @@ export async function createArtifact(opts: {
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
   writeFileSync(join(dir, "bundle.html"), skeletonHtml(opts.name), "utf-8");
 
-  const agentEntry = await createAndSaveAgent({
+  const agentEntry = await createNewAgent({
     name: `${opts.name} maintainer`,
     icon: opts.agentIcon,
     color: opts.agentColor,

@@ -14,3 +14,8 @@ export function getLettaClient(): Letta {
   }
   return client;
 }
+
+export function resetLettaClient(): void {
+  client = null;
+  log.info("Reset client singleton");
+}
