@@ -10,7 +10,7 @@ const log = createLogger("skill-installer");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function getSkillsDir(): string {
+export function getSkillsDir(): string {
   if (isDev()) {
     // Dev: src/skills/ relative to dist-electron/electron/libs/
     return join(__dirname, "../../../src/skills");
