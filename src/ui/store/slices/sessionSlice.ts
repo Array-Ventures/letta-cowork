@@ -34,13 +34,13 @@ export function createSession(id: string): SessionView {
 export interface SessionSlice {
   sessions: Record<string, SessionView>;
   activeSessionId: string | null;
-  artifactSessionId: string | null;
+  appSessionId: string | null;
   sessionsLoaded: boolean;
   historyRequested: Set<string>;
   showStartModal: boolean;
 
   setActiveSessionId: (id: string | null) => void;
-  setArtifactSessionId: (id: string | null) => void;
+  setAppSessionId: (id: string | null) => void;
   setShowStartModal: (show: boolean) => void;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
@@ -51,14 +51,14 @@ export interface SessionSlice {
 export const createSessionSlice: StateCreator<AppState, [], [], SessionSlice> = (set) => ({
   sessions: {},
   activeSessionId: null,
-  artifactSessionId: null,
+  appSessionId: null,
   sessionsLoaded: false,
   historyRequested: new Set(),
   showStartModal: false,
 
-  setActiveSessionId: (id) => set({ activeSessionId: id, activeView: { type: "chat" }, artifactSessionId: null }),
+  setActiveSessionId: (id) => set({ activeSessionId: id, activeView: { type: "chat" }, appSessionId: null }),
 
-  setArtifactSessionId: (artifactSessionId) => set({ artifactSessionId }),
+  setAppSessionId: (appSessionId) => set({ appSessionId }),
 
   setShowStartModal: (showStartModal) => set({ showStartModal }),
 
@@ -269,8 +269,8 @@ export function handleSessionEvent(
 
       if (state.pendingStart) {
         const av = state.activeView;
-        if (av.type === "artifact" && av.agentId && agentId === av.agentId) {
-          set({ artifactSessionId: sessionId, pendingStart: false, prompt: "" });
+        if (av.type === "app" && av.agentId && agentId === av.agentId) {
+          set({ appSessionId: sessionId, pendingStart: false, prompt: "" });
         } else {
           get().setActiveSessionId(sessionId);
           set({ pendingStart: false, showStartModal: false, prompt: "" });

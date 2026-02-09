@@ -36,7 +36,6 @@
     ],
     "exclude": [
         "src/electron",
-        "src/artifacts",
         "src/skills"
     ]
 }

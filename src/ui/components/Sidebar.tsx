@@ -15,10 +15,10 @@ export function Sidebar({
   onNewApp,
   onSettings,
 }: SidebarProps) {
-  const { sessions, agents, selectedAgentId, activeView, artifacts, currentConfig } = useAppStore(
+  const { sessions, agents, selectedAgentId, activeView, currentConfig } = useAppStore(
     useShallow((s) => ({
       sessions: s.sessions, agents: s.agents, selectedAgentId: s.selectedAgentId,
-      activeView: s.activeView, artifacts: s.artifacts, currentConfig: s.currentConfig,
+      activeView: s.activeView, currentConfig: s.currentConfig,
     }))
   );
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
@@ -30,6 +30,10 @@ export function Sidebar({
     list.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     return list;
   }, [sessions]);
+
+  // Split agents into regular agents and apps
+  const regularAgents = useMemo(() => agents.filter((a) => !a.appConfig), [agents]);
+  const appAgents = useMemo(() => agents.filter((a) => a.appConfig), [agents]);
 
   // Auto-select first agent if none selected
   useEffect(() => {
@@ -119,13 +123,13 @@ export function Sidebar({
 
       {/* Agent List */}
       <div className="flex flex-col gap-2 overflow-y-auto -mt-2">
-        {agents.length === 0 && (
+        {regularAgents.length === 0 && (
           <div className="rounded-xl border border-ink-900/5 bg-surface px-4 py-5 text-center text-xs text-muted">
             No agents yet. Create one to get started.
           </div>
         )}
 
-        {agents.filter((a) => !artifacts.some((art) => art.agentId === a.lettaAgentId)).map((agent) => {
+        {regularAgents.map((agent) => {
           const agentSessions = sessionList.filter((s) => s.agentId === agent.lettaAgentId);
           return (
             <AgentCard
@@ -153,24 +157,23 @@ export function Sidebar({
             </svg>
           </button>
         </div>
-        {artifacts.map((artifact) => {
-          const isActive = activeView.type === "artifact" && activeView.artifactId === artifact.id;
+        {appAgents.map((agent) => {
+          const isActive = activeView.type === "app" && activeView.agentId === agent.lettaAgentId;
           return (
             <button
-              key={artifact.id}
+              key={agent.lettaAgentId}
               className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors ${
                 isActive ? "bg-accent-subtle font-medium text-ink-800" : "text-ink-700 hover:bg-surface-tertiary"
               }`}
-              onClick={() => setActiveView({ type: "artifact", artifactId: artifact.id, agentId: artifact.agentId })}
+              onClick={() => setActiveView({ type: "app", agentId: agent.lettaAgentId })}
             >
-              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 ${isActive ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-                <path d="M9 14h6" />
-                <path d="M9 18h6" />
-                <path d="M9 10h6" />
-              </svg>
-              {artifact.name}
+              <div
+                className="flex h-6 w-6 items-center justify-center rounded-full flex-shrink-0"
+                style={{ backgroundColor: agent.color }}
+              >
+                <AgentIcon name={agent.icon} className="h-3 w-3 text-white" />
+              </div>
+              {agent.name}
             </button>
           );
         })}

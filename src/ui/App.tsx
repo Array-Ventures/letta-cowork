@@ -4,7 +4,7 @@ import { useIPC } from "./hooks/useIPC";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "./store/useAppStore";
 import { Sidebar, AgentIcon } from "./components/Sidebar";
-import { ArtifactViewer } from "./components/ArtifactViewer";
+import { AppViewer } from "./components/AppViewer";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { CreateAgentModal } from "./components/CreateAgentModal";
 import { CreateAppModal } from "./components/CreateAppModal";
@@ -27,13 +27,13 @@ function App() {
 
   const {
     configStatus, currentConfig, sessions, activeSessionId,
-    artifactSessionId, showStartModal, globalError, historyRequested,
+    appSessionId, showStartModal, globalError, historyRequested,
     prompt, cwd, pendingStart, agents, models, selectedAgentId,
     sessionsLoaded, agentsLoaded, activeView, sessionMode,
   } = useAppStore(useShallow((s) => ({
     configStatus: s.configStatus, currentConfig: s.currentConfig,
     sessions: s.sessions, activeSessionId: s.activeSessionId,
-    artifactSessionId: s.artifactSessionId, showStartModal: s.showStartModal,
+    appSessionId: s.appSessionId, showStartModal: s.showStartModal,
     globalError: s.globalError, historyRequested: s.historyRequested,
     prompt: s.prompt, cwd: s.cwd, pendingStart: s.pendingStart,
     agents: s.agents, models: s.models, selectedAgentId: s.selectedAgentId,
@@ -116,7 +116,6 @@ function App() {
     if (connected && configStatus === "configured") {
       sendEvent({ type: "session.list" });
       sendEvent({ type: "agent.list" });
-      sendEvent({ type: "artifacts.list" });
     }
   }, [connected, configStatus, sendEvent]);
 
@@ -141,15 +140,15 @@ function App() {
     }
   }, [activeSessionId, connected, sessions, historyRequested, markHistoryRequested, sendEvent]);
 
-  // Hydrate artifact session
+  // Hydrate app session
   useEffect(() => {
-    if (!artifactSessionId || !connected) return;
-    const session = sessions[artifactSessionId];
-    if (session && !session.hydrated && !historyRequested.has(artifactSessionId)) {
-      markHistoryRequested(artifactSessionId);
-      sendEvent({ type: "session.history", payload: { sessionId: artifactSessionId } });
+    if (!appSessionId || !connected) return;
+    const session = sessions[appSessionId];
+    if (session && !session.hydrated && !historyRequested.has(appSessionId)) {
+      markHistoryRequested(appSessionId);
+      sendEvent({ type: "session.history", payload: { sessionId: appSessionId } });
     }
-  }, [artifactSessionId, connected, sessions, historyRequested, markHistoryRequested, sendEvent]);
+  }, [appSessionId, connected, sessions, historyRequested, markHistoryRequested, sendEvent]);
 
   const handleNewSession = useCallback(() => {
     useAppStore.getState().setActiveSessionId(null);
@@ -173,8 +172,11 @@ function App() {
     sendEvent({ type: "models.list" });
   }, [sendEvent]);
 
-  const handleCreateApp = useCallback((name: string, icon: string, agentIcon: string, agentColor: string, model?: string) => {
-    sendEvent({ type: "artifact.create", payload: { name, icon, agentIcon, agentColor, model } });
+  const handleCreateApp = useCallback((payload: {
+    name: string; icon: string; color: string; model?: string;
+    repoUrl: string; branch?: string; port: number; startCommand: string; installCommand: string;
+  }) => {
+    sendEvent({ type: "app.create", payload });
     setShowCreateAppModal(false);
   }, [sendEvent]);
 
@@ -208,12 +210,12 @@ function App() {
         <HomePage />
       ) : activeView.type === "files" ? (
         <FilesView sendEvent={sendEvent} />
-      ) : activeView.type === "artifact" ? (
-        <ArtifactViewer
-          artifactId={activeView.artifactId}
+      ) : activeView.type === "app" ? (
+        <AppViewer
+          agentId={activeView.agentId}
           sendEvent={sendEvent}
-          partialMessage={partialSessionId === artifactSessionId ? partialMessage : ""}
-          showPartialMessage={partialSessionId === artifactSessionId ? showPartialMessage : false}
+          partialMessage={partialSessionId === appSessionId ? partialMessage : ""}
+          showPartialMessage={partialSessionId === appSessionId ? showPartialMessage : false}
         />
       ) : (
       <main className="flex flex-1 flex-col ml-[280px] bg-surface-cream">

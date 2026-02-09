@@ -4,7 +4,7 @@ import type { ServerEvent } from "../types";
 import { createConfigSlice, handleConfigEvent, type ConfigSlice } from "./slices/configSlice";
 import { createSessionSlice, handleSessionEvent, type SessionSlice } from "./slices/sessionSlice";
 import { createAgentSlice, handleAgentEvent, type AgentSlice } from "./slices/agentSlice";
-import { createArtifactSlice, handleArtifactEvent, type ArtifactSlice } from "./slices/artifactSlice";
+import { createAppSlice, handleAppEvent, type AppSlice } from "./slices/appSlice";
 import { createFolderSlice, handleFolderEvent, type FolderSlice } from "./slices/folderSlice";
 import { createUISlice, handleUIEvent, type UISlice } from "./slices/uiSlice";
 
@@ -15,7 +15,7 @@ export type { OnboardingData } from "./slices/configSlice";
 export type AppState = ConfigSlice &
   SessionSlice &
   AgentSlice &
-  ArtifactSlice &
+  AppSlice &
   FolderSlice &
   UISlice & {
     handleServerEvent: (event: ServerEvent) => void;
@@ -28,7 +28,7 @@ export const useAppStore = create<AppState>()((...a) => {
     ...createConfigSlice(...a),
     ...createSessionSlice(...a),
     ...createAgentSlice(...a),
-    ...createArtifactSlice(...a),
+    ...createAppSlice(...a),
     ...createFolderSlice(...a),
     ...createUISlice(...a),
 
@@ -37,7 +37,7 @@ export const useAppStore = create<AppState>()((...a) => {
       if (handleConfigEvent(event, set)) return;
       if (handleSessionEvent(event, set, get)) return;
       if (handleAgentEvent(event, set)) return;
-      if (handleArtifactEvent(event, set)) return;
+      if (handleAppEvent(event, set)) return;
       if (handleFolderEvent(event, set, get)) return;
       if (handleUIEvent(event, set)) return;
     },

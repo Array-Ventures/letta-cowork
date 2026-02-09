@@ -32,16 +32,25 @@ export function getDaytonaClient(): Daytona {
  * Create a Daytona sandbox for a cloud agent.
  * Returns the sandbox ID for storing in the agent entry.
  */
-export async function createSandbox(agentName: string): Promise<{ sandboxId: string }> {
+export async function createSandbox(
+  agentName: string,
+  opts?: { language?: string; envVars?: Record<string, string> },
+): Promise<{ sandboxId: string }> {
   const daytona = getDaytonaClient();
   log.info("Creating sandbox for agent:", agentName);
 
   const sandbox = await daytona.create({
-    language: "python",
-    envVars: { AGENT_NAME: agentName },
+    language: opts?.language ?? "python",
+    envVars: { AGENT_NAME: agentName, ...opts?.envVars },
   });
 
   log.info("Sandbox created:", { sandboxId: sandbox.id, agentName });
   return { sandboxId: sandbox.id };
+}
+
+/** Get an existing sandbox by ID */
+export async function getSandbox(sandboxId: string) {
+  const daytona = getDaytonaClient();
+  return daytona.get(sandboxId);
 }
 

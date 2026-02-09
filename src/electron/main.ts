@@ -1,8 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu, protocol, net } from "electron"
+import { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu } from "electron"
 import { execSync } from "child_process";
 import { config as dotenvConfig } from "dotenv";
 import { join } from "path";
-import { pathToFileURL } from "url";
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { createLogger } from "./libs/logger.js";
 import { getRecentCwds, addRecentCwd } from "./libs/recent-cwds.js";
@@ -38,23 +37,9 @@ try {
   log.warn("Could not find letta CLI:", e);
 }
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
-import { seedArtifacts, getArtifactBundlePath } from "./libs/artifact-store.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
 import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
 import type { ClientEvent } from "./types.js";
-
-// Register artifact:// as a privileged scheme (must be called before app ready)
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: "artifact",
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      bypassCSP: true,
-    },
-  },
-]);
 
 let cleanupComplete = false;
 let mainWindow: BrowserWindow | null = null;
@@ -90,18 +75,6 @@ function handleSignal(): void {
 // Initialize everything when app is ready
 app.on("ready", () => {
     Menu.setApplicationMenu(null);
-
-    // Seed built-in artifacts into ~/.letta-cowork/artifacts/
-    seedArtifacts();
-
-    // Serve artifact:// URLs from ~/.letta-cowork/artifacts/<id>/bundle.html
-    protocol.handle("artifact", (request) => {
-        const url = new URL(request.url);
-        const artifactId = url.pathname.replace(/^\//, "");
-        const bundlePath = getArtifactBundlePath(artifactId);
-        if (!bundlePath) return new Response("Not found", { status: 404 });
-        return net.fetch(pathToFileURL(bundlePath).toString());
-    });
 
     // Setup event handlers
     app.on("before-quit", cleanup);

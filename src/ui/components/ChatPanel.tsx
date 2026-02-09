@@ -19,6 +19,7 @@ interface ChatPanelProps {
   partialMessage?: string;
   showPartialMessage?: boolean;
   onSendMessage?: () => void;
+  forceCloudMode?: boolean;
 }
 
 export function ChatPanel({
@@ -30,6 +31,7 @@ export function ChatPanel({
   partialMessage = "",
   showPartialMessage = false,
   onSendMessage,
+  forceCloudMode = false,
 }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -271,6 +273,7 @@ export function ChatPanel({
           agentIdOverride={compact ? agentId : undefined}
           cwdOverride={compact ? defaultCwd : undefined}
           compact={compact}
+          forceCloudMode={forceCloudMode}
         />
       )}
 

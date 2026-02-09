@@ -12,10 +12,6 @@
             "to": "skills"
         },
         {
-            "from": "src/artifacts",
-            "to": "artifacts"
-        },
-        {
             "from": "src/sandbox-tools",
             "to": "sandbox-tools"
         }

@@ -10,7 +10,6 @@ interface AgentChatSidebarProps {
   agentName: string;
   agentIcon: string;
   agentColor: string;
-  defaultCwd?: string;
   sendEvent: (event: ClientEvent) => void;
   partialMessage?: string;
   showPartialMessage?: boolean;
@@ -21,16 +20,15 @@ export function AgentChatSidebar({
   agentName,
   agentIcon,
   agentColor,
-  defaultCwd,
   sendEvent,
   partialMessage = "",
   showPartialMessage = false,
 }: AgentChatSidebarProps) {
-  const { artifactSessionId, sessions } = useAppStore(
-    useShallow((s) => ({ artifactSessionId: s.artifactSessionId, sessions: s.sessions }))
+  const { appSessionId, sessions } = useAppStore(
+    useShallow((s) => ({ appSessionId: s.appSessionId, sessions: s.sessions }))
   );
-  const setArtifactSessionId = useAppStore((s) => s.setArtifactSessionId);
-  const session = artifactSessionId ? sessions[artifactSessionId] : undefined;
+  const setAppSessionId = useAppStore((s) => s.setAppSessionId);
+  const session = appSessionId ? sessions[appSessionId] : undefined;
   const isRunning = session?.status === "running";
 
   const [showSessionDropdown, setShowSessionDropdown] = useState(false);
@@ -41,12 +39,12 @@ export function AgentChatSidebar({
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   const handleSwitchSession = (sessionId: string) => {
-    setArtifactSessionId(sessionId);
+    setAppSessionId(sessionId);
     setShowSessionDropdown(false);
   };
 
   const handleNewChat = () => {
-    setArtifactSessionId(null);
+    setAppSessionId(null);
     setShowSessionDropdown(false);
   };
 
@@ -109,7 +107,7 @@ export function AgentChatSidebar({
                 key={s.id}
                 onClick={() => handleSwitchSession(s.id)}
                 className={`w-full px-3 py-2 text-left text-xs hover:bg-surface-hover truncate ${
-                  s.id === artifactSessionId ? "text-accent font-medium" : "text-ink-700"
+                  s.id === appSessionId ? "text-accent font-medium" : "text-ink-700"
                 }`}
               >
                 {s.title || s.id.slice(0, 8)}
@@ -119,15 +117,15 @@ export function AgentChatSidebar({
         )}
       </div>
 
-      {/* Chat Area — reuses ChatPanel in compact mode */}
+      {/* Chat Area — reuses ChatPanel in compact mode, always cloud */}
       <ChatPanel
-        sessionId={artifactSessionId}
+        sessionId={appSessionId}
         sendEvent={sendEvent}
         compact
         agentId={agentId}
-        defaultCwd={defaultCwd}
         partialMessage={partialMessage}
         showPartialMessage={showPartialMessage}
+        forceCloudMode
       />
     </div>
   );

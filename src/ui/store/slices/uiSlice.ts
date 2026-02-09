@@ -27,14 +27,14 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   sessionMode: "cloud",
 
   setActiveView: (activeView) => {
-    if (activeView.type === "artifact" && activeView.agentId) {
+    if (activeView.type === "app" && activeView.agentId) {
       const sessions = Object.values(get().sessions);
       const agentSessions = sessions
         .filter((s) => s.agentId === activeView.agentId)
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-      set({ activeView, artifactSessionId: agentSessions[0]?.id ?? null });
+      set({ activeView, appSessionId: agentSessions[0]?.id ?? null });
     } else {
-      set({ activeView, artifactSessionId: null });
+      set({ activeView, appSessionId: null });
     }
   },
 

@@ -16,12 +16,13 @@ interface PromptInputProps {
   agentIdOverride?: string;
   cwdOverride?: string;
   compact?: boolean;
+  forceCloudMode?: boolean;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function usePromptActions(
   sendEvent: (event: ClientEvent) => void,
-  overrides?: { sessionId?: string | null; agentId?: string; cwd?: string }
+  overrides?: { sessionId?: string | null; agentId?: string; cwd?: string; forceCloudMode?: boolean }
 ) {
   const { prompt, cwd, storeActiveSessionId, sessions, selectedAgentId } = useAppStore(
     useShallow((s) => ({
@@ -33,7 +34,7 @@ export function usePromptActions(
   const setPendingStart = useAppStore((s) => s.setPendingStart);
   const setGlobalError = useAppStore((s) => s.setGlobalError);
 
-  // Use overrides when provided (e.g. artifact sidebar)
+  // Use overrides when provided (e.g. app chat sidebar)
   const activeSessionId = overrides?.sessionId !== undefined ? overrides.sessionId : storeActiveSessionId;
   const agentId = overrides?.agentId ?? selectedAgentId;
   const effectiveCwd = overrides?.cwd ?? cwd;
@@ -44,25 +45,23 @@ export function usePromptActions(
   const handleSend = useCallback(async () => {
     if (!prompt.trim()) return;
 
+    const sessionMode = overrides?.forceCloudMode ? "cloud" : useAppStore.getState().sessionMode;
+
     if (!activeSessionId) {
       setPendingStart(true);
-      const sessionMode = useAppStore.getState().sessionMode;
-      // Title will be set from conversation ID
       sendEvent({
         type: "session.start",
         payload: { title: "", prompt, cwd: effectiveCwd.trim() || undefined, agentId: agentId || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS, mode: sessionMode }
       });
-      // Don't clear prompt yet - wait for modal to close to avoid UI flicker
     } else {
       if (activeSession?.status === "running") {
         setGlobalError("Session is still running. Please wait for it to finish.");
         return;
       }
-      const sessionMode = useAppStore.getState().sessionMode;
-      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: effectiveCwd.trim() || activeSession?.cwd, mode: sessionMode } });
+      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: effectiveCwd.trim() || activeSession?.cwd, mode: sessionMode, agentId: agentId ?? undefined } });
       setPrompt("");
     }
-  }, [activeSession, activeSessionId, agentId, effectiveCwd, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
+  }, [activeSession, activeSessionId, agentId, effectiveCwd, overrides?.forceCloudMode, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
@@ -70,21 +69,20 @@ export function usePromptActions(
   }, [activeSessionId, sendEvent]);
 
   const handleStartFromModal = useCallback(() => {
-    // Cloud sessions don't need a working directory
-    const sessionMode = useAppStore.getState().sessionMode;
+    const sessionMode = overrides?.forceCloudMode ? "cloud" : useAppStore.getState().sessionMode;
     if (sessionMode !== "cloud" && !cwd.trim()) {
       setGlobalError("Working Directory is required to start a local session.");
       return;
     }
     handleSend();
-  }, [cwd, handleSend, setGlobalError]);
+  }, [cwd, handleSend, overrides?.forceCloudMode, setGlobalError]);
 
   return { prompt, setPrompt, isRunning, handleSend, handleStop, handleStartFromModal };
 }
 
-export function PromptInput({ sendEvent, onSendMessage, disabled = false, sessionIdOverride, agentIdOverride, cwdOverride, compact = false }: PromptInputProps) {
-  const overrides = sessionIdOverride !== undefined || agentIdOverride !== undefined || cwdOverride !== undefined
-    ? { sessionId: sessionIdOverride, agentId: agentIdOverride, cwd: cwdOverride }
+export function PromptInput({ sendEvent, onSendMessage, disabled = false, sessionIdOverride, agentIdOverride, cwdOverride, compact = false, forceCloudMode = false }: PromptInputProps) {
+  const overrides = sessionIdOverride !== undefined || agentIdOverride !== undefined || cwdOverride !== undefined || forceCloudMode
+    ? { sessionId: sessionIdOverride, agentId: agentIdOverride, cwd: cwdOverride, forceCloudMode }
     : undefined;
   const { prompt, setPrompt, isRunning, handleSend, handleStop } = usePromptActions(sendEvent, overrides);
   const sessionMode = useAppStore((s) => s.sessionMode);
@@ -169,8 +167,8 @@ export function PromptInput({ sendEvent, onSendMessage, disabled = false, sessio
       ? "border-t border-ink-900/10 bg-surface px-3 py-3"
       : "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]"
     }>
-      {/* CWD bar — shown in local mode only (non-compact) */}
-      {sessionMode === "local" && !compact && (
+      {/* CWD bar — shown in local mode only (non-compact, not forceCloudMode) */}
+      {sessionMode === "local" && !compact && !forceCloudMode && (
         <div className="mx-auto flex w-full max-w-full items-center gap-1.5 lg:max-w-3xl mb-2 px-1">
           <button
             type="button"
@@ -222,19 +220,21 @@ export function PromptInput({ sendEvent, onSendMessage, disabled = false, sessio
           ref={promptRef}
           disabled={disabled && !isRunning}
         />
-        <button
-          type="button"
-          onClick={toggleMode}
-          className="flex h-7 items-center gap-1 rounded-xl border border-ink-900/10 bg-surface-tertiary px-2 text-[11px] font-medium text-ink-700 hover:bg-surface-secondary transition-colors shrink-0"
-          title={sessionMode === "cloud" ? "Cloud mode — tools run in Daytona" : "Local mode — tools run on your machine"}
-        >
-          {sessionMode === "cloud" ? (
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg>
-          ) : (
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" /></svg>
-          )}
-          {sessionMode === "cloud" ? "Cloud" : "Local"}
-        </button>
+        {!forceCloudMode && (
+          <button
+            type="button"
+            onClick={toggleMode}
+            className="flex h-7 items-center gap-1 rounded-xl border border-ink-900/10 bg-surface-tertiary px-2 text-[11px] font-medium text-ink-700 hover:bg-surface-secondary transition-colors shrink-0"
+            title={sessionMode === "cloud" ? "Cloud mode — tools run in Daytona" : "Local mode — tools run on your machine"}
+          >
+            {sessionMode === "cloud" ? (
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" /></svg>
+            )}
+            {sessionMode === "cloud" ? "Cloud" : "Local"}
+          </button>
+        )}
         <button
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${isRunning ? "bg-error text-white hover:bg-error/90" : "bg-accent text-white hover:bg-accent-hover"}`}
           onClick={handleButtonClick}

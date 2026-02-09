@@ -29,7 +29,12 @@ import {
   createNewAgent,
   ensureCloudReady,
 } from "./libs/agent-store.js";
-import { listArtifacts, ensureArtifactAgents, createArtifact, getArtifactBundlePath } from "./libs/artifact-store.js";
+import {
+  setupAndStartApp,
+  stopDevServer,
+  isDevServerRunning,
+  getAppPreviewUrl,
+} from "./libs/app-manager.js";
 import {
   listFolders,
   createFolder,
@@ -49,14 +54,11 @@ import { resetLettaClient } from "./libs/letta-client.js";
 import { resetDaytonaClient } from "./libs/daytona.js";
 import { Letta } from "@letta-ai/letta-client";
 import { Daytona } from "@daytonaio/sdk";
-import { watch, type FSWatcher } from "node:fs";
-import { dirname, basename } from "node:path";
-
 // Track active runner handles
 const runnerHandles = new Map<string, RunnerHandle>();
 
-// Track active file watcher for artifact live reload
-let activeArtifactWatcher: FSWatcher | null = null;
+// Guard against concurrent app.start / app.create for the same agent
+const appStartsInProgress = new Set<string>();
 
 // After SDK run completes (or after approval response), fetch the true state from REST
 // and push it to the UI. This replaces ephemeral SDK stream messages with canonical data.
@@ -267,55 +269,161 @@ export async function handleClientEvent(event: ClientEvent) {
     return;
   }
 
-  // Artifacts
-  if (event.type === "artifacts.list") {
-    await ensureArtifactAgents();
-    const artifacts = listArtifacts();
-    emit({ type: "artifacts.list", payload: { artifacts } });
-    // Refresh agent list since new agents may have been created
+  // App management (cloud-native apps in Daytona sandboxes)
+  if (event.type === "app.create") {
+    log.info("app.create", { name: event.payload.name, repoUrl: event.payload.repoUrl, branch: event.payload.branch, port: event.payload.port });
     try {
-      const agents = await fetchAgents();
-      emit({ type: "agent.list", payload: { agents } });
-    } catch (error) {
-      log.error("Failed to refresh agents after artifact list:", error);
-    }
-    return;
-  }
+      const appConfig = {
+        repoUrl: event.payload.repoUrl,
+        branch: event.payload.branch,
+        port: event.payload.port ?? 3000,
+        startCommand: event.payload.startCommand ?? "npm run dev",
+        installCommand: event.payload.installCommand ?? "npm install",
+      };
 
-  if (event.type === "artifact.create") {
-    try {
-      const artifact = await createArtifact(event.payload);
-      emit({ type: "artifact.created", payload: { artifact } });
-      // Refresh both lists
-      emit({ type: "artifacts.list", payload: { artifacts: listArtifacts() } });
-      const agents = await fetchAgents();
-      emit({ type: "agent.list", payload: { agents } });
-    } catch (error) {
-      emit({ type: "runner.error", payload: { message: `Failed to create app: ${error}` } });
-    }
-    return;
-  }
+      log.debug("app.create: creating agent with appConfig", appConfig);
+      const agent = await createNewAgent({
+        name: event.payload.name,
+        icon: event.payload.icon,
+        color: event.payload.color,
+        model: event.payload.model,
+        appConfig,
+      });
+      log.info("app.create: agent created", { lettaAgentId: agent.lettaAgentId, sandboxId: agent.sandboxId });
+      emit({ type: "agent.created", payload: agent });
 
-  if (event.type === "artifact.watch") {
-    // Clean up previous watcher
-    if (activeArtifactWatcher) {
-      activeArtifactWatcher.close();
-      activeArtifactWatcher = null;
-    }
-
-    if (event.payload.artifactId) {
-      const bundlePath = getArtifactBundlePath(event.payload.artifactId);
-      if (bundlePath) {
-        // Watch the directory, not the file — atomic mv replaces the inode,
-        // which breaks fs.watch on the file after the first replacement.
-        const dir = dirname(bundlePath);
-        const filename = basename(bundlePath);
-        activeArtifactWatcher = watch(dir, (_eventType, changedFile) => {
-          if (changedFile === filename) {
-            emit({ type: "artifact.reload", payload: { artifactId: event.payload.artifactId! } });
-          }
-        });
+      // Set up sandbox: clone repo, install deps, start dev server
+      if (agent.sandboxId) {
+        // Mark in-progress so concurrent app.start calls are skipped
+        appStartsInProgress.add(agent.lettaAgentId);
+        log.info("app.create: setting up sandbox", { sandboxId: agent.sandboxId });
+        emit({ type: "app.status", payload: { agentId: agent.lettaAgentId, status: "starting" } });
+        try {
+          const { previewUrl } = await setupAndStartApp(agent.sandboxId, appConfig);
+          log.info("app.create: app running", { agentId: agent.lettaAgentId, previewUrl });
+          emit({ type: "app.status", payload: { agentId: agent.lettaAgentId, status: "running", previewUrl } });
+        } finally {
+          appStartsInProgress.delete(agent.lettaAgentId);
+        }
+      } else {
+        log.warn("app.create: no sandboxId, app cannot start");
       }
+    } catch (error) {
+      log.error("Failed to create app:", error);
+      emit({ type: "app.status", payload: { agentId: "unknown", status: "error", error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "app.start") {
+    const { agentId } = event.payload;
+
+    // Skip if already being set up by app.create or another app.start
+    if (appStartsInProgress.has(agentId)) {
+      log.info("app.start: skipped, already in progress", { agentId });
+      return;
+    }
+
+    log.info("app.start", { agentId });
+    appStartsInProgress.add(agentId);
+    try {
+      emit({ type: "app.status", payload: { agentId, status: "starting" } });
+
+      // Fetch the agent to get its appConfig
+      const agents = await fetchAgents();
+      const agent = agents.find((a) => a.lettaAgentId === agentId);
+      if (!agent?.appConfig) throw new Error("Agent is not an app");
+
+      // ensureCloudReady handles all sandbox states (stopped/archived/error/missing)
+      log.info("app.start: ensuring cloud ready", { agentId });
+      const sandboxId = await ensureCloudReady(agentId);
+      log.info("app.start: cloud ready", { agentId, sandboxId });
+
+      // Check if dev server is already running
+      const running = await isDevServerRunning(sandboxId);
+      if (running) {
+        log.info("app.start: dev server already running, refreshing preview URL");
+        const preview = await getAppPreviewUrl(sandboxId, agent.appConfig.port);
+        emit({ type: "app.status", payload: { agentId, status: "running", previewUrl: preview.url } });
+        return;
+      }
+
+      log.info("app.start: starting full setup pipeline");
+      const { previewUrl } = await setupAndStartApp(sandboxId, agent.appConfig);
+      log.info("app.start: app running", { agentId, previewUrl });
+      emit({ type: "app.status", payload: { agentId, status: "running", previewUrl } });
+    } catch (error) {
+      log.error("Failed to start app:", error);
+      emit({ type: "app.status", payload: { agentId, status: "error", error: String(error) } });
+    } finally {
+      appStartsInProgress.delete(agentId);
+    }
+    return;
+  }
+
+  if (event.type === "app.rebuild") {
+    const { agentId } = event.payload;
+
+    if (appStartsInProgress.has(agentId)) {
+      log.info("app.rebuild: skipped, already in progress", { agentId });
+      return;
+    }
+
+    log.info("app.rebuild", { agentId });
+    appStartsInProgress.add(agentId);
+    try {
+      emit({ type: "app.status", payload: { agentId, status: "starting" } });
+
+      const agents = await fetchAgents();
+      const agent = agents.find((a) => a.lettaAgentId === agentId);
+      if (!agent?.appConfig) throw new Error("Agent is not an app");
+
+      const sandboxId = await ensureCloudReady(agentId);
+      await stopDevServer(sandboxId);
+
+      const { previewUrl } = await setupAndStartApp(sandboxId, agent.appConfig);
+      log.info("app.rebuild: app running", { agentId, previewUrl });
+      emit({ type: "app.status", payload: { agentId, status: "running", previewUrl } });
+    } catch (error) {
+      log.error("Failed to rebuild app:", error);
+      emit({ type: "app.status", payload: { agentId, status: "error", error: String(error) } });
+    } finally {
+      appStartsInProgress.delete(agentId);
+    }
+    return;
+  }
+
+  if (event.type === "app.stop") {
+    const { agentId } = event.payload;
+    log.info("app.stop", { agentId });
+    try {
+      const agents = await fetchAgents();
+      const agent = agents.find((a) => a.lettaAgentId === agentId);
+      if (!agent?.appConfig || !agent?.sandboxId) throw new Error("Not an app agent");
+      log.info("app.stop: stopping dev server", { sandboxId: agent.sandboxId });
+      await stopDevServer(agent.sandboxId);
+      emit({ type: "app.status", payload: { agentId, status: "stopped" } });
+      log.info("app.stop: stopped", { agentId });
+    } catch (error) {
+      log.error("Failed to stop app:", error);
+      emit({ type: "app.status", payload: { agentId, status: "error", error: String(error) } });
+    }
+    return;
+  }
+
+  if (event.type === "app.preview") {
+    const { agentId } = event.payload;
+    log.debug("app.preview", { agentId });
+    try {
+      const agents = await fetchAgents();
+      const agent = agents.find((a) => a.lettaAgentId === agentId);
+      if (!agent?.sandboxId || !agent?.appConfig) throw new Error("Not an app agent");
+      const preview = await getAppPreviewUrl(agent.sandboxId, agent.appConfig.port);
+      log.debug("app.preview: refreshed URL", { agentId, previewUrl: preview.url });
+      emit({ type: "app.status", payload: { agentId, status: "running", previewUrl: preview.url } });
+    } catch (error) {
+      log.error("Failed to get preview URL:", error);
+      emit({ type: "app.status", payload: { agentId, status: "error", error: String(error) } });
     }
     return;
   }
@@ -557,9 +665,10 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     try {
-      // Ensure cloud infra exists when switching to cloud mid-session
-      if (isCloud && runtimeSession.agentId) {
-        await ensureCloudReady(runtimeSession.agentId);
+      // Ensure cloud infra exists (use payload agentId, fall back to runtime state)
+      const agentId = event.payload.agentId ?? runtimeSession.agentId;
+      if (isCloud && agentId) {
+        await ensureCloudReady(agentId);
       }
 
       const runnerOptions = {

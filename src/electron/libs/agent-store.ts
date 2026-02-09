@@ -7,7 +7,7 @@ import { installSkillsForAgent, getSkillsDir } from "./skill-installer.js";
 import { getLettaClient } from "./letta-client.js";
 import { isDev } from "../util.js";
 import { createLogger } from "./logger.js";
-import type { AgentInfo } from "../types.js";
+import type { AgentInfo, AppRepoConfig } from "../types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,6 +32,7 @@ function agentStateToInfo(agent: any): AgentInfo {
     model: agent.model ?? undefined,
     createdAt: agent.created_at ?? new Date().toISOString(),
     sandboxId: sandboxSecret?.value,
+    appConfig: agent.metadata?.appConfig,
   };
 }
 
@@ -171,10 +172,10 @@ async function populateSkillsBlock(agentId: string, skills: { id: string; name: 
  * Provision cloud infra for an agent: create Daytona sandbox, upload skills, attach tools.
  * Shared by both createNewAgent and ensureCloudReady.
  */
-async function provisionCloud(lettaAgentId: string, agentName: string): Promise<string> {
+async function provisionCloud(lettaAgentId: string, agentName: string, language?: string): Promise<string> {
   const { createSandbox } = await import("./daytona.js");
   const { attachSandboxToolsToAgent } = await import("./sandbox-tools.js");
-  const result = await createSandbox(agentName);
+  const result = await createSandbox(agentName, { language });
 
   const skills = await uploadSkillsToSandbox(result.sandboxId);
   await populateSkillsBlock(lettaAgentId, skills);
@@ -192,6 +193,7 @@ export async function createNewAgent(opts: {
   icon: string;
   color: string;
   model?: string;
+  appConfig?: AppRepoConfig;
 }): Promise<AgentInfo> {
   const lettaAgentId = await createAgent(
     opts.model ? { model: opts.model } : undefined
@@ -203,15 +205,20 @@ export async function createNewAgent(opts: {
   // Set name and UI metadata on server
   await updateAgent(lettaAgentId, {
     name: opts.name,
-    metadata: { icon: opts.icon, color: opts.color },
+    metadata: {
+      icon: opts.icon,
+      color: opts.color,
+      ...(opts.appConfig ? { appConfig: opts.appConfig } : {}),
+    },
   }).catch((err) =>
     log.warn("Failed to set agent name/metadata on server:", err)
   );
 
   // Always set up cloud (Daytona sandbox + skills + tools) so mode switching is instant
   let sandboxId: string | undefined;
+  const language = opts.appConfig ? "javascript" : undefined;
   try {
-    sandboxId = await provisionCloud(lettaAgentId, opts.name);
+    sandboxId = await provisionCloud(lettaAgentId, opts.name, language);
   } catch (err) {
     log.warn("Cloud setup failed (agent will work in local mode only):", err);
   }
@@ -225,6 +232,7 @@ export async function createNewAgent(opts: {
     model: opts.model,
     createdAt: new Date().toISOString(),
     sandboxId,
+    appConfig: opts.appConfig,
   };
 }
 
@@ -253,16 +261,16 @@ function readLocalSkillMetadata(): { id: string; name: string; description: stri
  * Reads sandbox ID from the Letta server secrets (not local JSON).
  */
 export async function ensureCloudReady(lettaAgentId: string): Promise<string> {
+  log.info("ensureCloudReady", { lettaAgentId });
   const client = getLettaClient();
-  const agentState = await client.agents.retrieve(lettaAgentId);
+  const agentState = await client.agents.retrieve(lettaAgentId, { include: ["agent.secrets"] });
   const sandboxSecret = agentState.secrets?.find((s: any) => s.key === "SANDBOX_ID");
   const sandboxId = sandboxSecret?.value;
 
   if (!sandboxId) {
-    log.info(`Provisioning cloud for agent ${lettaAgentId}...`);
+    log.info("ensureCloudReady: no sandbox, provisioning", { lettaAgentId });
     const newSandboxId = await provisionCloud(lettaAgentId, agentState.name ?? lettaAgentId);
-    // sandboxId is persisted to server secrets by attachSandboxToolsToAgent
-    log.info(`Cloud provisioned for agent ${lettaAgentId}: sandbox=${newSandboxId}`);
+    log.info("ensureCloudReady: provisioned", { lettaAgentId, sandboxId: newSandboxId });
     return newSandboxId;
   }
 
@@ -270,24 +278,30 @@ export async function ensureCloudReady(lettaAgentId: string): Promise<string> {
   const { getDaytonaClient } = await import("./daytona.js");
   const daytona = getDaytonaClient();
   const sandbox = await daytona.get(sandboxId);
-  log.debug(`Sandbox ${sandboxId} state: ${sandbox.state}`);
+  log.info("ensureCloudReady: sandbox state", { sandboxId, state: sandbox.state });
 
   if (sandbox.state === "started") {
-    // Already running
+    log.info("ensureCloudReady: sandbox already started", { sandboxId });
   } else if (sandbox.state === "stopped") {
-    log.info(`Sandbox ${sandboxId} is stopped, starting...`);
+    log.info("ensureCloudReady: starting stopped sandbox", { sandboxId });
     await sandbox.start();
+    log.info("ensureCloudReady: sandbox started", { sandboxId });
   } else if (sandbox.state === "error" && sandbox.recoverable) {
-    log.info(`Sandbox ${sandboxId} in recoverable error, recovering...`);
+    log.info("ensureCloudReady: recovering errored sandbox", { sandboxId });
     await sandbox.recover();
-  } else if (sandbox.state === "archived") {
-    log.info(`Sandbox ${sandboxId} is archived, recovering...`);
-    await sandbox.recover();
+    log.info("ensureCloudReady: recovered, now starting", { sandboxId });
     await sandbox.start();
+    log.info("ensureCloudReady: sandbox started after recovery", { sandboxId });
+  } else if (sandbox.state === "archived") {
+    log.info("ensureCloudReady: recovering archived sandbox", { sandboxId });
+    await sandbox.recover();
+    log.info("ensureCloudReady: recovered, now starting", { sandboxId });
+    await sandbox.start();
+    log.info("ensureCloudReady: sandbox started after recovery", { sandboxId });
   } else {
-    // Unrecoverable (destroyed, non-recoverable error, etc.) — reprovision
-    log.warn(`Sandbox ${sandboxId} in state "${sandbox.state}", reprovisioning...`);
+    log.warn("ensureCloudReady: unrecoverable state, reprovisioning", { sandboxId, state: sandbox.state });
     const newSandboxId = await provisionCloud(lettaAgentId, agentState.name ?? lettaAgentId);
+    log.info("ensureCloudReady: reprovisioned", { lettaAgentId, sandboxId: newSandboxId });
     return newSandboxId;
   }
 
@@ -296,3 +310,4 @@ export async function ensureCloudReady(lettaAgentId: string): Promise<string> {
   await populateSkillsBlock(lettaAgentId, skills);
   return sandboxId;
 }
+

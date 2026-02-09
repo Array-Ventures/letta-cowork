@@ -64,7 +64,19 @@ export type AgentInfo = {
   model?: string;
   createdAt: string;
   sandboxId?: string;
+  appConfig?: AppRepoConfig;
 };
+
+// Cloud-native app config — stored in agent.metadata on Letta server
+export type AppRepoConfig = {
+  repoUrl: string;
+  branch?: string;
+  port: number;
+  startCommand: string;
+  installCommand: string;
+};
+
+export type AppServerStatus = "stopped" | "starting" | "running" | "error";
 
 export type ModelInfo = {
   handle: string;
@@ -115,20 +127,12 @@ export type AppConfig = {
 export type OrgInfo = { id: string; name: string };
 export type IdentityInfo = { id: string; name: string; identifierKey: string };
 
-// Artifacts
+// Views
 export type ActiveView =
   | { type: "home" }
   | { type: "chat" }
-  | { type: "artifact"; artifactId: string; agentId?: string }
+  | { type: "app"; agentId: string }
   | { type: "files" };
-
-export type ArtifactInfo = {
-  id: string;
-  name: string;
-  icon: string;
-  agentId?: string;
-  path?: string;
-};
 
 // Server -> Client events
 export type ServerEvent =
@@ -146,9 +150,7 @@ export type ServerEvent =
   | { type: "agent.deleted"; payload: { lettaAgentId: string } }
   | { type: "agent.renamed"; payload: { lettaAgentId: string; name: string } }
   | { type: "models.list"; payload: { models: ModelInfo[] } }
-  | { type: "artifacts.list"; payload: { artifacts: ArtifactInfo[] } }
-  | { type: "artifact.created"; payload: { artifact: ArtifactInfo } }
-  | { type: "artifact.reload"; payload: { artifactId: string } }
+  | { type: "app.status"; payload: { agentId: string; status: AppServerStatus; previewUrl?: string; error?: string } }
   | { type: "folder.list"; payload: { folders: FolderInfo[] } }
   | { type: "folder.created"; payload: FolderInfo }
   | { type: "folder.updated"; payload: FolderInfo }
@@ -173,7 +175,7 @@ export type ServerEvent =
 // Client -> Server events
 export type ClientEvent =
   | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; agentId?: string; allowedTools?: string; mode?: "local" | "cloud" } }
-  | { type: "session.continue"; payload: { sessionId: string; prompt: string; cwd?: string; mode?: "local" | "cloud" } }
+  | { type: "session.continue"; payload: { sessionId: string; prompt: string; cwd?: string; mode?: "local" | "cloud"; agentId?: string } }
   | { type: "session.stop"; payload: { sessionId: string } }
   | { type: "session.delete"; payload: { sessionId: string } }
   | { type: "session.list" }
@@ -184,10 +186,12 @@ export type ClientEvent =
   | { type: "agent.delete"; payload: { lettaAgentId: string } }
   | { type: "agent.rename"; payload: { lettaAgentId: string; name: string } }
   | { type: "models.list" }
-  | { type: "artifacts.list" }
   | { type: "approval.response"; payload: { sessionId: string; approvals: Array<{ tool_call_id: string; approve: boolean; reason?: string }> } }
-  | { type: "artifact.create"; payload: { name: string; icon: string; agentIcon: string; agentColor: string; model?: string } }
-  | { type: "artifact.watch"; payload: { artifactId: string | null } }
+  | { type: "app.create"; payload: { name: string; icon: string; color: string; model?: string; repoUrl: string; branch?: string; port?: number; startCommand?: string; installCommand?: string } }
+  | { type: "app.start"; payload: { agentId: string } }
+  | { type: "app.stop"; payload: { agentId: string } }
+  | { type: "app.rebuild"; payload: { agentId: string } }
+  | { type: "app.preview"; payload: { agentId: string } }
   | { type: "folder.list" }
   | { type: "folder.create"; payload: { name: string; description?: string; instructions?: string; embedding?: string } }
   | { type: "folder.update"; payload: { folderId: string; name?: string; description?: string; instructions?: string } }

@@ -22,7 +22,17 @@ const AGENT_COLORS = [
 
 interface CreateAppModalProps {
   onClose: () => void;
-  onCreate: (name: string, icon: string, agentIcon: string, agentColor: string, model?: string) => void;
+  onCreate: (payload: {
+    name: string;
+    icon: string;
+    color: string;
+    model?: string;
+    repoUrl: string;
+    branch?: string;
+    port: number;
+    startCommand: string;
+    installCommand: string;
+  }) => void;
   models: ModelInfo[];
   loadingModels: boolean;
 }
@@ -30,8 +40,15 @@ interface CreateAppModalProps {
 export function CreateAppModal({ onClose, onCreate, models, loadingModels }: CreateAppModalProps) {
   const [name, setName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState(APP_ICONS[0].name);
-  const [selectedAgentColor, setSelectedAgentColor] = useState(AGENT_COLORS[0]);
+  const [selectedColor, setSelectedColor] = useState(AGENT_COLORS[0]);
   const [selectedModel, setSelectedModel] = useState("");
+
+  // Git repo config
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("");
+  const [port, setPort] = useState("3000");
+  const [startCommand, setStartCommand] = useState("npm run dev");
+  const [installCommand, setInstallCommand] = useState("npm install");
 
   // Auto-select first model when loaded
   useEffect(() => {
@@ -41,14 +58,23 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
   }, [models, selectedModel]);
 
   const handleCreate = () => {
-    if (!name.trim()) return;
-    // Use the same icon for both app and agent
-    onCreate(name.trim(), selectedIcon, selectedIcon, selectedAgentColor, selectedModel || undefined);
+    if (!name.trim() || !repoUrl.trim()) return;
+    onCreate({
+      name: name.trim(),
+      icon: selectedIcon,
+      color: selectedColor,
+      model: selectedModel || undefined,
+      repoUrl: repoUrl.trim(),
+      branch: branch.trim() || undefined,
+      port: parseInt(port, 10) || 3000,
+      startCommand: startCommand.trim() || "npm run dev",
+      installCommand: installCommand.trim() || "npm install",
+    });
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/20 px-4 py-8 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-3xl border border-ink-900/5 bg-surface p-6 shadow-elevated">
+      <div className="w-full max-w-md rounded-3xl border border-ink-900/5 bg-surface p-6 shadow-elevated max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <div className="text-xl font-semibold text-ink-900">Create New App</div>
           <button
@@ -63,7 +89,7 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
         </div>
 
         <p className="mt-2 text-sm leading-relaxed text-muted">
-          Create a new app with a skeleton page and a dedicated maintainer agent.
+          Create a new cloud app from a git repository. The repo will be cloned into a Daytona sandbox with a live dev server.
         </p>
 
         <div className="mt-5 grid gap-4">
@@ -75,8 +101,62 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
               placeholder="My Dashboard"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               autoFocus
+            />
+          </label>
+
+          {/* Git Repo URL */}
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted">Git Repository URL</span>
+            <input
+              className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+              placeholder="https://github.com/user/repo"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+            />
+          </label>
+
+          {/* Branch (optional) */}
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted">Branch <span className="text-muted-light">(optional, defaults to main)</span></span>
+            <input
+              className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+              placeholder="main"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+            />
+          </label>
+
+          {/* Port + Commands row */}
+          <div className="grid grid-cols-3 gap-3">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium text-muted">Port</span>
+              <input
+                className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                placeholder="3000"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                type="number"
+              />
+            </label>
+            <label className="grid gap-1.5 col-span-2">
+              <span className="text-xs font-medium text-muted">Start Command</span>
+              <input
+                className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                placeholder="npm run dev"
+                value={startCommand}
+                onChange={(e) => setStartCommand(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted">Install Command</span>
+            <input
+              className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+              placeholder="npm install"
+              value={installCommand}
+              onChange={(e) => setInstallCommand(e.target.value)}
             />
           </label>
 
@@ -93,7 +173,7 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
               </div>
             ) : models.length === 0 ? (
               <div className="rounded-xl border border-error/20 bg-error-light px-4 py-2.5 text-sm text-error">
-                No models available. Check your Letta server configuration.
+                No models available.
               </div>
             ) : (
               <select
@@ -112,7 +192,7 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
 
           {/* Icon Picker */}
           <div className="grid gap-1.5">
-            <span className="text-xs font-medium text-muted">App Icon</span>
+            <span className="text-xs font-medium text-muted">Icon</span>
             <div className="flex gap-2">
               {APP_ICONS.map((icon) => (
                 <button
@@ -132,17 +212,17 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
             </div>
           </div>
 
-          {/* Agent Color Picker */}
+          {/* Color Picker */}
           <div className="grid gap-1.5">
-            <span className="text-xs font-medium text-muted">Agent Color</span>
+            <span className="text-xs font-medium text-muted">Color</span>
             <div className="flex gap-2.5">
               {AGENT_COLORS.map((color) => (
                 <button
                   key={color}
                   type="button"
-                  onClick={() => setSelectedAgentColor(color)}
+                  onClick={() => setSelectedColor(color)}
                   className={`h-8 w-8 rounded-full transition-all ${
-                    selectedAgentColor === color ? "ring-2 ring-offset-2 ring-ink-400 scale-110" : "hover:scale-105"
+                    selectedColor === color ? "ring-2 ring-offset-2 ring-ink-400 scale-110" : "hover:scale-105"
                   }`}
                   style={{ backgroundColor: color }}
                 />
@@ -154,7 +234,7 @@ export function CreateAppModal({ onClose, onCreate, models, loadingModels }: Cre
           <button
             className="mt-2 flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             onClick={handleCreate}
-            disabled={!name.trim() || (!loadingModels && models.length === 0)}
+            disabled={!name.trim() || !repoUrl.trim() || (!loadingModels && models.length === 0)}
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 5V19M5 12H19" />
